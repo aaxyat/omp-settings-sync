@@ -12,7 +12,10 @@ export interface GhClient {
   remoteUrl(id: string): string;
 }
 
+export const DEFAULT_SYNC_REPO_NAME = "OhMyPiSyncData";
+
 export const LIKELY_SYNC_REPO_NAMES = [
+  "OhMyPiSyncData",
   "omp-agent-config",
   "my-omp-config",
   "omp-config",

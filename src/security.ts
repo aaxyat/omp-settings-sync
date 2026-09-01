@@ -24,6 +24,8 @@ export const DEFAULT_ALLOWED_PATHS = [
   "omp-sync.json",
   "git-sync.jsonc",
   "git-sync.json",
+  "vault.enc",
+  ".vault.enc",
   "extensions",
   "skills",
   "agents",
@@ -68,6 +70,11 @@ export function isDenied(file: string): boolean {
   const normalized = file.toLowerCase().replaceAll("\\", "/");
   const parts = normalized.split("/").filter(Boolean);
   const basename = parts[parts.length - 1] ?? "";
+
+  // The encrypted vault is explicitly safe and permitted to sync
+  if (basename === "vault.enc" || basename === ".vault.enc") {
+    return false;
+  }
 
   const deniedSegments = [
     "sessions",

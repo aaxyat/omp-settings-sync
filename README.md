@@ -4,9 +4,19 @@
 [![CI](https://github.com/aaxyat/omp-settings-sync/actions/workflows/ci.yml/badge.svg)](https://github.com/aaxyat/omp-settings-sync/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-Securely sync your [Oh My Pi](https://omp.sh) (`~/.omp/agent`) configuration across machines through a private Git remote — automatically, with 4-tier guards keeping secrets, databases, and runtime state out.
+Securely sync your [Oh My Pi](https://omp.sh) (`~/.omp/agent`) configuration, session tokens, and login credentials across machines through a private Git remote (`OhMyPiSyncData`) — automatically, with 4-tier guards keeping plaintext secrets, databases, and runtime state out.
 
 The agent directory (`~/.omp/agent` or `~/.omp/profiles/<profile>/agent`) **is** the repository, ensuring transparent version history with zero shadow staging copies.
+
+---
+
+## Features
+
+- 🔒 **Encrypted Credentials Vault:** Optional password-protected AES-256-GCM encrypted vault (`vault.enc`) to synchronize session tokens and logins (`auth.json`, `auth-broker.json`) safely across devices.
+- 🛡️ **4-Tier Security Guards:** Inverted allowlist `.gitignore`, local `.git/info/exclude`, pre-commit staging blocker, and tracked file scanner ensuring plaintext secrets, tokens, and SQLite databases (`agent.db*`, `models.db*`, `history.db*`) are never committed.
+- ⚙️ **Dual YAML & JSON Clean/Smudge Filter:** Machine-local settings (`images.urls.credentials`, `dev.autoqaPush.token`, `searxng.*`, `hindsight.*`, `auth.broker.*`, `setupVersion`, `shellPath`, etc.) are stripped from commits and preserved in local sidecars.
+- 🚀 **Zero-Touch GitHub Setup:** Automatically creates and discovers private `OhMyPiSyncData` repositories using authenticated GitHub CLI (`gh`).
+- 🔄 **Graceful Onboarding:** Linking on a new device without entering a password syncs all unencrypted configuration smoothly without errors; unlock your encrypted vault anytime via `/ompsync unlock`.
 
 ---
 
@@ -17,7 +27,7 @@ The agent directory (`~/.omp/agent` or `~/.omp/profiles/<profile>/agent`) **is**
 omp plugin install omp-settings-sync
 ```
 
-Or from a specific npm tag/scoped package:
+Or from a specific scoped package/version:
 ```sh
 omp plugin install @aaxyat/omp-settings-sync@0.1.0
 ```
@@ -34,29 +44,30 @@ Place `dist/index.js` or symlink the project directory inside `~/.omp/agent/exte
 
 ## Quickstart
 
-### 1. First Machine
+### 1. First Machine Setup
 Run:
 ```text
 /ompsync init
 ```
-With GitHub CLI authenticated (`gh auth login`), it detects your account, creates a private `omp-agent-config` repository, commits allowlisted files, and pushes them.
+1. It asks if you want to securely sync session tokens and credentials. If confirmed, enter a passphrase.
+2. With GitHub CLI authenticated (`gh auth login`), it creates a private `OhMyPiSyncData` repository, commits allowlisted configuration and encrypted vault, and pushes to GitHub.
 
-Without `gh`, create a private remote on GitHub or GitLab, then pass the URL:
+Without `gh`, specify a private remote:
 ```text
-/ompsync init git@github.com:you/omp-agent-config.git
+/ompsync init git@github.com:you/OhMyPiSyncData.git
 ```
 
-### 2. Additional Machines
-Run:
+### 2. Linking on New Devices
+On your second machine, run:
 ```text
 /ompsync link
 ```
-(or `/ompsync link <remote-url>`).
+- Enter your vault passphrase to decrypt and restore session tokens (`auth.json`).
+- **If you skip or leave the passphrase blank:** All unencrypted configuration syncs normally with zero errors. You can unlock your credentials vault anytime later.
+- Any differing local allowed files are safely preserved as `<file>.local-backup`.
 
-It connects the remote repository. Any differing local allowed files are safely preserved as `<file>.local-backup`. Run `/reload` afterwards.
-
-### 3. Daily Usage
-Synchronization is fully automatic:
+### 3. Daily Synchronization
+Synchronization is automatic:
 - **Session Start:** Checks rate limit (default every 5 minutes) and performs a background fetch, rebase, and push.
 - **Session Shutdown:** Performs a fast best-effort commit and push.
 
@@ -66,12 +77,16 @@ Synchronization is fully automatic:
 
 | Command | Description |
 | :--- | :--- |
-| `/ompsync init [url\|name]` | Initialize and push the first-machine private repository |
+| `/ompsync init [url\|name]` | Initialize and push the first-machine repository (`OhMyPiSyncData`) |
 | `/ompsync link [url\|name]` | Link an existing sync repository on a new machine |
-| `/ompsync status` | Display repository state, branch, and tracked sensitive files check |
+| `/ompsync status` | Display repository state, branch, vault status, and security checks |
 | `/ompsync sync` | Commit, fetch, integrate remote changes (rebase), and push |
 | `/ompsync push` | Commit and push local changes without pulling |
 | `/ompsync pull` | Fetch and rebase remote updates |
+| `/ompsync unlock [passphrase]` | Decrypt credentials vault and restore local `auth.json` |
+| `/ompsync lock` | Clear cached vault key from local machine memory and cache |
+| `/ompsync vault enable [passphrase]` | Enable encrypted credentials vault and encrypt `auth.json` |
+| `/ompsync vault disable` | Disable and remove credentials vault from repository |
 
 *(Note: `/gitsync` is registered as a direct alias for backwards compatibility.)*
 
@@ -79,37 +94,24 @@ Synchronization is fully automatic:
 
 ## Security Model
 
-`omp-settings-sync` uses an **exclusive allowlist** architecture combined with **4 defensive tiers**:
-
-### What Syncs (Allowlist)
-- `config.yml` / `config.yaml`: Global model defaults, themes, tool parameters (with machine-local & sensitive keys stripped via git filter)
+### What Syncs in Plaintext (Allowlist)
+- `config.yml` / `config.yaml`: Global model defaults, themes, tool parameters (with machine-local & sensitive keys stripped)
 - `mcp.json`: Model Context Protocol server registrations
-- `settings.json`: Legacy/migrated settings (with machine keys stripped)
+- `settings.json`: Legacy/migrated settings
 - `AGENTS.md` / `Agents.md`: Global instructions and directives
 - `extensions/`, `skills/`, `agents/`, `chains/`, `prompts/`, `themes/`, `plugins/`: Custom resources
 - `.gitignore`, `.gitattributes`, `omp-sync.jsonc`: Sync policy
 
-### What NEVER Syncs (Hard Denylist)
-- `auth*` (`auth.json`, `auth-broker.json`): API keys and OAuth tokens
-- `*token*`, `*secret*`, `*credential*`, `*.env*`, `*.local.json`, `*.local.yml`: Any file containing secrets
+### What Syncs Encrypted (Vault)
+- `vault.enc`: AES-256-GCM encrypted payload containing `auth.json`, `auth-broker.json`, and login session tokens.
+
+### What NEVER Syncs in Plaintext (Hard Denylist)
+- `auth*` (`auth.json`, `auth-broker.json`): Raw plaintext API keys and OAuth tokens
+- `*token*`, `*secret*`, `*credential*`, `*.env*`, `*.local.json`, `*.local.yml`: Plaintext secrets
 - `*.db`, `*.db-*`, `*.sqlite*` (`agent.db`, `models.db`, `history.db`): SQLite databases and WAL caches
 - `sessions/`, `state/`, `blobs/`, `terminal-sessions/`, `cache/`, `natives/`, `logs/`, `run/`, `wt/`, `.git-sync/`: Local session history, process sockets, worktrees, and machine state
 - `node_modules/`, `npm/`, `git/`, `bin/`: Dependencies and binaries
 - `last-changelog-version`: Machine changelog tracking
-
-### 4-Tier Guard Enforcement
-1. **Tier 1 (Inverted `.gitignore`):** Ignores `*` by default and un-ignores only explicit allowed paths, followed by a hard denylist.
-2. **Tier 2 (`.git/info/exclude`):** Non-committable secondary barrier ensuring denylist rules hold even if `.gitignore` is modified.
-3. **Tier 3 (Pre-Commit Staging Blocker):** Inspects staged files via `git diff --cached --name-only -z` and aborts the commit if any sensitive file was staged (even with `git add -f`).
-4. **Tier 4 (Tracked Secrets Scanner):** Scans `git ls-files -z` during status and sync to alert if sensitive files were previously tracked.
-
----
-
-## Machine-Local Settings Filter
-
-Oh My Pi `config.yml` and `settings.json` use a zero-dependency clean/smudge filter:
-- **Clean Mode:** Strips machine-specific and sensitive keys (`images.urls.credentials`, `dev.autoqaPush.token`, `searxng.*`, `hindsight.*`, `auth.broker.*`, `setupVersion`, `shellPath`, `python.interpreter`, etc.) before committing to git.
-- **Smudge Mode:** Merges local machine keys back from `.git-sync/config.machine.yml` and `.git-sync/settings.machine.json` on checkout.
 
 ---
 

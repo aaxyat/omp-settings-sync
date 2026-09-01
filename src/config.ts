@@ -26,6 +26,12 @@ export interface UIContext {
   ui?: {
     setStatus(key: string, status?: string): void;
     notify(message: string, level: Level): void;
+    input?(title: string, placeholder?: string): Promise<string | undefined>;
+    confirm?(title: string, message: string): Promise<boolean>;
+    select?(
+      title: string,
+      options: Array<{ label: string; value?: string; description?: string }>
+    ): Promise<string | undefined>;
   };
 }
 

@@ -2,7 +2,18 @@ import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@o
 import { dirOf } from "./config.js";
 import { countAheadBehind, isSyncableRepo, pushOrigin, upstreamRef } from "./git.js";
 import { isSubagentChild, shouldAutoSync, withLock, writeSyncState } from "./lock.js";
-import { commitLocalChanges, prepareCommit, runInit, runLink, runSync, showStatus } from "./sync.js";
+import {
+  commitLocalChanges,
+  prepareCommit,
+  runDisableVault,
+  runEnableVault,
+  runInit,
+  runLink,
+  runLockVault,
+  runSync,
+  runUnlockVault,
+  showStatus,
+} from "./sync.js";
 
 export default function gitSyncExtension(pi: ExtensionAPI) {
   pi.setLabel("OMP Config Git Sync");
@@ -13,13 +24,51 @@ export default function gitSyncExtension(pi: ExtensionAPI) {
 
     try {
       await withLock(ctx, async () => {
-        if (command === "init") return runInit(arg, ctx);
-        if (command === "link") return runLink(arg, ctx);
-        if (command === "status") return showStatus(ctx);
-        if (command === "sync") return runSync(ctx, { auto: false, push: true });
-        if (command === "push") return runSync(ctx, { auto: false, push: true, skipPull: true });
-        if (command === "pull") return runSync(ctx, { auto: false, push: false });
-        throw new Error("Unknown command. Usage: /ompsync [init|link|status|sync|push|pull]");
+        if (command === "init") {
+          return runInit(arg, ctx);
+        }
+        if (command === "link") {
+          return runLink(arg, ctx);
+        }
+        if (command === "status") {
+          return showStatus(ctx);
+        }
+        if (command === "sync") {
+          return runSync(ctx, { auto: false, push: true });
+        }
+        if (command === "push") {
+          return runSync(ctx, { auto: false, push: true, skipPull: true });
+        }
+        if (command === "pull") {
+          return runSync(ctx, { auto: false, push: false });
+        }
+        if (command === "unlock") {
+          return runUnlockVault(arg || undefined, ctx);
+        }
+        if (command === "lock") {
+          return runLockVault(ctx);
+        }
+        if (command === "vault") {
+          const [subcommand = "status", ...subRest] = arg.trim().split(/\s+/);
+          const subArg = subRest.join(" ");
+          if (subcommand === "enable") {
+            return runEnableVault(subArg || undefined, ctx);
+          }
+          if (subcommand === "disable") {
+            return runDisableVault(ctx);
+          }
+          if (subcommand === "unlock") {
+            return runUnlockVault(subArg || undefined, ctx);
+          }
+          if (subcommand === "lock") {
+            return runLockVault(ctx);
+          }
+          if (subcommand === "status") {
+            return showStatus(ctx);
+          }
+          throw new Error("Unknown vault subcommand. Usage: /ompsync vault [enable|disable|unlock|lock|status]");
+        }
+        throw new Error("Unknown command. Usage: /ompsync [init|link|status|sync|push|pull|unlock|lock|vault]");
       });
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
@@ -28,9 +77,9 @@ export default function gitSyncExtension(pi: ExtensionAPI) {
   };
 
   const commandDef = {
-    description: "Securely sync Oh My Pi config (init, link, status, sync, push, pull)",
+    description: "Securely sync Oh My Pi config and encrypted credentials vault",
     getArgumentCompletions: (prefix: string) => {
-      const entries = ["init", "link", "status", "sync", "push", "pull"]
+      const entries = ["init", "link", "status", "sync", "push", "pull", "unlock", "lock", "vault"]
         .map((value) => ({ value, label: value }))
         .filter((x) => x.value.startsWith(prefix.trim()));
       return entries.length ? entries : null;
@@ -56,7 +105,10 @@ export default function gitSyncExtension(pi: ExtensionAPI) {
   });
 
   pi.on("session_shutdown", async (event, ctx: ExtensionContext) => {
-    const reason = typeof event === "object" && event && "reason" in event && typeof event.reason === "string" ? event.reason : undefined;
+    const reason =
+      typeof event === "object" && event && "reason" in event && typeof event.reason === "string"
+        ? event.reason
+        : undefined;
     if (reason === "reload" || isSubagentChild() || !(await isSyncableRepo())) return;
 
     try {

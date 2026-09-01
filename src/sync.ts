@@ -4,7 +4,7 @@ import path from "node:path";
 import type { Ctx, Deps } from "./config.js";
 import { dirOf, readConfig } from "./config.js";
 import { ensureAttributes, ensureFilter, refreshMachineSidecar } from "./filter.js";
-import { defaultGh, LIKELY_SYNC_REPO_NAMES, parseRepoReference, remoteFromArg } from "./gh.js";
+import { DEFAULT_SYNC_REPO_NAME, defaultGh, LIKELY_SYNC_REPO_NAMES, parseRepoReference, remoteFromArg } from "./gh.js";
 import {
   countAheadBehind,
   fetchOrigin,
@@ -24,6 +24,20 @@ import {
   stagedSecretFiles,
   trackedSecretFiles,
 } from "./security.js";
+import {
+  cacheVaultPassword,
+  clearCachedVaultPassword,
+  decryptPayload,
+  deleteVaultFile,
+  encryptPayload,
+  getCachedVaultPassword,
+  getVaultStatus,
+  hasVaultFile,
+  packSensitiveFiles,
+  readVaultFile,
+  unpackSensitiveFiles,
+  writeVaultFile,
+} from "./vault.js";
 
 const STATUS_KEY = "omp-git-sync";
 
@@ -47,6 +61,20 @@ export async function prepareCommit(deps?: Deps, ctx?: Ctx) {
   await ensureAttributes(dir);
   await ensureFilter(dir, config);
   await refreshMachineSidecar(dir, config);
+
+  // If vault is enabled and unlocked on this machine, update vault.enc with latest local credentials
+  const vaultStatus = await getVaultStatus(dir);
+  if (vaultStatus === "unlocked") {
+    const password = await getCachedVaultPassword(dir);
+    if (password) {
+      const payload = await packSensitiveFiles(dir);
+      if (Object.keys(payload.files).length > 0) {
+        const encrypted = encryptPayload(payload, password);
+        await writeVaultFile(dir, encrypted);
+      }
+    }
+  }
+
   return config;
 }
 
@@ -70,11 +98,40 @@ export async function commitLocalChanges(deps?: Deps, commitMessage?: string, ct
   return true;
 }
 
-export async function runInit(arg: string, ctx?: Ctx, deps?: Deps): Promise<void> {
+export async function runInit(
+  arg: string,
+  ctx?: Ctx,
+  deps?: Deps,
+  options?: { password?: string; enableVault?: boolean }
+): Promise<void> {
   const dir = dirOf(deps);
   await fs.mkdir(dir, { recursive: true });
   if (await isSyncableRepo(dir)) {
     throw new Error("already initialized; use /ompsync sync");
+  }
+
+  // Check if vault encryption should be set up
+  let password = options?.password;
+  if (password === undefined && options?.enableVault !== false && ctx?.hasUI && ctx.ui) {
+    const wantVault = ctx.ui.confirm
+      ? await ctx.ui.confirm(
+          "Encrypted Credentials Sync",
+          "Do you want to securely sync session tokens and login credentials with a password?"
+        )
+      : false;
+    if (wantVault && ctx.ui.input) {
+      const pass = await ctx.ui.input("Vault Passphrase", "Enter a passphrase to encrypt your credentials vault:");
+      if (pass && pass.trim()) {
+        password = pass.trim();
+      }
+    }
+  }
+
+  if (password) {
+    const payload = await packSensitiveFiles(dir);
+    const encrypted = encryptPayload(payload, password);
+    await writeVaultFile(dir, encrypted);
+    await cacheVaultPassword(dir, password);
   }
 
   const config = await readConfig(deps, ctx);
@@ -99,7 +156,7 @@ export async function runInit(arg: string, ctx?: Ctx, deps?: Deps): Promise<void
       return;
     }
     const owner = await gh.currentUser();
-    const ref = parseRepoReference(arg || "omp-agent-config", owner);
+    const ref = parseRepoReference(arg || DEFAULT_SYNC_REPO_NAME, owner);
     if (!ref) throw new Error(`invalid repository reference: ${arg}`);
     const id = `${ref.owner}/${ref.name}`;
     if (await gh.repoExists(id)) {
@@ -114,7 +171,12 @@ export async function runInit(arg: string, ctx?: Ctx, deps?: Deps): Promise<void
     throw new Error("initial push failed");
   }
 
-  notify(ctx, "omp-sync: initialized and pushed private config repo.", "info", deps);
+  notify(
+    ctx,
+    `omp-sync: initialized and pushed private repository (${password ? "with encrypted vault" : "config only"}).`,
+    "info",
+    deps
+  );
 }
 
 async function defaultBranch(dir: string): Promise<string> {
@@ -149,7 +211,12 @@ async function backupConflicts(dir: string, branch: string): Promise<string[]> {
   return backups;
 }
 
-export async function runLink(arg: string, ctx?: Ctx, deps?: Deps): Promise<void> {
+export async function runLink(
+  arg: string,
+  ctx?: Ctx,
+  deps?: Deps,
+  options?: { password?: string }
+): Promise<void> {
   const dir = dirOf(deps);
   if (await isSyncableRepo(dir)) {
     throw new Error("already linked; use /ompsync sync");
@@ -197,7 +264,8 @@ export async function runLink(arg: string, ctx?: Ctx, deps?: Deps): Promise<void
     await git(["checkout", "-B", branch, `origin/${branch}`], dir);
   } catch (error) {
     const output = message(error);
-    const refused = output.match(/would be overwritten by checkout:\n([\s\S]*?)Please move or remove/)?.[1]?.split("\n").map((l) => l.trim()).filter(Boolean) ?? [];
+    const refused =
+      output.match(/would be overwritten by checkout:\n([\s\S]*?)Please move or remove/)?.[1]?.split("\n").map((l) => l.trim()).filter(Boolean) ?? [];
     for (const relative of refused) {
       if (isDenied(relative)) continue;
       const target = path.join(dir, relative);
@@ -217,6 +285,49 @@ export async function runLink(arg: string, ctx?: Ctx, deps?: Deps): Promise<void
     }
   }
 
+  // Handle encrypted vault if present
+  let vaultDecrypted = false;
+  const hasVault = await hasVaultFile(dir);
+  if (hasVault) {
+    let password = options?.password;
+    if (password === undefined && ctx?.hasUI && ctx.ui && ctx.ui.input) {
+      const entered = await ctx.ui.input(
+        "Encrypted Credentials Vault",
+        "Remote repository contains an encrypted credentials vault. Enter passphrase to decrypt session tokens and login (or leave blank to skip):"
+      );
+      if (entered && entered.trim()) {
+        password = entered.trim();
+      }
+    }
+
+    if (password) {
+      const vaultRaw = await readVaultFile(dir);
+      if (vaultRaw) {
+        try {
+          const payload = decryptPayload(vaultRaw, password);
+          const restored = await unpackSensitiveFiles(dir, payload);
+          await cacheVaultPassword(dir, password);
+          vaultDecrypted = true;
+          notify(ctx, `omp-sync: decrypted credentials vault and restored: ${restored.join(", ")}`, "info", deps);
+        } catch {
+          notify(
+            ctx,
+            "omp-sync: incorrect passphrase. Unencrypted config was linked. Run '/ompsync unlock' later.",
+            "warning",
+            deps
+          );
+        }
+      }
+    } else {
+      notify(
+        ctx,
+        "omp-sync: credentials vault is locked. Run '/ompsync unlock' when you wish to decrypt session tokens.",
+        "info",
+        deps
+      );
+    }
+  }
+
   const tracked = await trackedSecretFiles(dir);
   if (tracked.length) {
     notify(ctx, `omp-sync: remote tracks sensitive files: ${tracked.join(", ")}. Remove with git rm --cached <file>.`, "warning", deps);
@@ -224,7 +335,9 @@ export async function runLink(arg: string, ctx?: Ctx, deps?: Deps): Promise<void
 
   notify(
     ctx,
-    `omp-sync: linked — run /reload to apply pulled config.${backups.length ? ` Backed up: ${backups.join(", ")}.` : ""}`,
+    `omp-sync: linked — run /reload to apply pulled config.${backups.length ? ` Backed up: ${backups.join(", ")}.` : ""}${
+      vaultDecrypted ? " (Vault restored)" : ""
+    }`,
     "info",
     deps
   );
@@ -240,10 +353,13 @@ export async function showStatus(ctx: Ctx, deps?: Deps): Promise<void> {
   const branch = (await git(["rev-parse", "--abbrev-ref", "HEAD"], dir)).stdout.trim();
   const dirty = (await git(["status", "--porcelain"], dir)).stdout.trim();
   const bad = await trackedSecretFiles(dir);
+  const vaultStatus = await getVaultStatus(dir);
 
   notify(
     ctx,
-    `repo: ${dir}\nbranch: ${branch}\nuncommitted changes: ${dirty ? "yes" : "none"}${bad.length ? `\nWARNING tracked sensitive files: ${bad.join(", ")}` : ""}`,
+    `repo: ${dir}\nbranch: ${branch}\nvault: ${vaultStatus}\nuncommitted changes: ${dirty ? "yes" : "none"}${
+      bad.length ? `\nWARNING tracked sensitive files: ${bad.join(", ")}` : ""
+    }`,
     bad.length ? "warning" : "info",
     deps
   );
@@ -290,6 +406,19 @@ export async function runSync(
             throw new Error(`local and remote diverged with conflicts; rebase aborted in ${dir}`);
           }
           changed.push("pulled updates");
+
+          // If remote updated vault.enc and we have a cached password, update local credentials
+          const vaultStatus = await getVaultStatus(dir);
+          if (vaultStatus === "unlocked") {
+            const password = await getCachedVaultPassword(dir);
+            const vaultRaw = await readVaultFile(dir);
+            if (password && vaultRaw) {
+              try {
+                const payload = decryptPayload(vaultRaw, password);
+                await unpackSensitiveFiles(dir, payload);
+              } catch {}
+            }
+          }
         }
       }
     }
@@ -314,4 +443,81 @@ export async function runSync(
   } finally {
     if (ctx?.hasUI && ctx.ui) ctx.ui.setStatus(STATUS_KEY, undefined);
   }
+}
+
+export async function runUnlockVault(passwordArg?: string, ctx?: Ctx, deps?: Deps): Promise<void> {
+  const dir = dirOf(deps);
+  if (!(await hasVaultFile(dir))) {
+    throw new Error("No encrypted vault file (vault.enc) found. Use '/ompsync vault enable' to create one.");
+  }
+
+  let password = passwordArg;
+  if (!password && ctx?.hasUI && ctx.ui && ctx.ui.input) {
+    const entered = await ctx.ui.input("Unlock Vault", "Enter passphrase to decrypt credentials vault:");
+    if (entered && entered.trim()) {
+      password = entered.trim();
+    }
+  }
+
+  if (!password) {
+    throw new Error("Passphrase required to unlock vault.");
+  }
+
+  const raw = await readVaultFile(dir);
+  if (!raw) throw new Error("Vault file is empty.");
+
+  const payload = decryptPayload(raw, password);
+  const restored = await unpackSensitiveFiles(dir, payload);
+  await cacheVaultPassword(dir, password);
+
+  notify(ctx, `omp-sync: vault unlocked. Restored: ${restored.join(", ")}`, "info", deps);
+}
+
+export async function runEnableVault(passwordArg?: string, ctx?: Ctx, deps?: Deps): Promise<void> {
+  const dir = dirOf(deps);
+  let password = passwordArg;
+  if (!password && ctx?.hasUI && ctx.ui && ctx.ui.input) {
+    const entered = await ctx.ui.input("Enable Vault", "Enter passphrase to encrypt credentials vault:");
+    if (entered && entered.trim()) {
+      password = entered.trim();
+    }
+  }
+
+  if (!password) {
+    throw new Error("Passphrase required to enable vault.");
+  }
+
+  const payload = await packSensitiveFiles(dir);
+  const encrypted = encryptPayload(payload, password);
+  await writeVaultFile(dir, encrypted);
+  await cacheVaultPassword(dir, password);
+
+  if (await isSyncableRepo(dir)) {
+    await commitLocalChanges(deps, "omp config: enable encrypted credentials vault", ctx);
+    const upstream = await upstreamRef(dir);
+    await pushOrigin(!upstream, dir);
+  }
+
+  notify(ctx, "omp-sync: encrypted credentials vault enabled and saved.", "info", deps);
+}
+
+export async function runDisableVault(ctx?: Ctx, deps?: Deps): Promise<void> {
+  const dir = dirOf(deps);
+  await deleteVaultFile(dir);
+  await clearCachedVaultPassword(dir);
+
+  if (await isSyncableRepo(dir)) {
+    await git(["rm", "-f", "vault.enc"], dir).catch(() => {});
+    await commitLocalChanges(deps, "omp config: disable encrypted credentials vault", ctx);
+    const upstream = await upstreamRef(dir);
+    await pushOrigin(!upstream, dir);
+  }
+
+  notify(ctx, "omp-sync: credentials vault disabled and removed from sync.", "info", deps);
+}
+
+export async function runLockVault(ctx?: Ctx, deps?: Deps): Promise<void> {
+  const dir = dirOf(deps);
+  await clearCachedVaultPassword(dir);
+  notify(ctx, "omp-sync: credentials vault locked on this machine.", "info", deps);
 }
