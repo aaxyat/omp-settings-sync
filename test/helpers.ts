@@ -5,6 +5,12 @@ import path from "node:path";
 import { promisify } from "node:util";
 import type { GhClient } from "../src/gh.js";
 
+process.env.GIT_AUTHOR_NAME = process.env.GIT_COMMITTER_NAME = "omp-settings-sync tests";
+process.env.GIT_AUTHOR_EMAIL = process.env.GIT_COMMITTER_EMAIL = "tests@omp-settings-sync.invalid";
+delete process.env.PI_SUBAGENT_DEPTH;
+delete process.env.OMP_SUBAGENT_DEPTH;
+delete process.env.OMP_IS_SUBAGENT;
+
 const exec = promisify(execFileCb);
 
 export async function sh(cmd: string, args: string[], cwd?: string) {

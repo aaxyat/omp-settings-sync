@@ -12,6 +12,10 @@ export function gitEnv(dir: string): NodeJS.ProcessEnv {
     ...process.env,
     GIT_TERMINAL_PROMPT: "0",
     GIT_CEILING_DIRECTORIES: ceiling,
+    GIT_AUTHOR_NAME: process.env.GIT_AUTHOR_NAME || "omp-sync",
+    GIT_AUTHOR_EMAIL: process.env.GIT_AUTHOR_EMAIL || "sync@omp.sh",
+    GIT_COMMITTER_NAME: process.env.GIT_COMMITTER_NAME || "omp-sync",
+    GIT_COMMITTER_EMAIL: process.env.GIT_COMMITTER_EMAIL || "sync@omp.sh",
   };
 }
 

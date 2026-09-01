@@ -1,6 +1,6 @@
 {
   "name": "omp-settings-sync",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Securely sync your ~/.omp/agent configuration across machines through a private git repo with hard secret guards.",
   "type": "module",
   "license": "MIT",
