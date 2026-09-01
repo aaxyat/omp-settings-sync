@@ -10,6 +10,7 @@ export interface GhClient {
   isPrivate(id: string): Promise<boolean | undefined>;
   createPrivateRepo(id: string): Promise<void>;
   remoteUrl(id: string): string;
+  setupGit(dir?: string): Promise<void>;
 }
 
 export const DEFAULT_SYNC_REPO_NAME = "OhMyPiSyncData";
@@ -92,5 +93,14 @@ export const defaultGh: GhClient = {
   },
   remoteUrl(id: string) {
     return `https://github.com/${id}.git`;
+  },
+  async setupGit(dir?: string) {
+    try {
+      if (dir) {
+        await exec("git", ["config", "credential.helper", "!gh auth git-credential"], { cwd: dir });
+      } else {
+        await exec("gh", ["auth", "setup-git"], { timeout: 5000 });
+      }
+    } catch {}
   },
 };

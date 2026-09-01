@@ -68,6 +68,9 @@ export function createFakeGh(overrides: Partial<GhClient> = {}): GhClient & { ca
     remoteUrl(id: string) {
       return `https://github.com/${id}.git`;
     },
+    async setupGit() {
+      calls.push("setupGit");
+    },
     ...overrides,
   };
 }

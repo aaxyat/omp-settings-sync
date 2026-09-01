@@ -189,11 +189,15 @@ export async function runInit(
     const ref = parseRepoReference(arg || DEFAULT_SYNC_REPO_NAME, owner);
     if (!ref) throw new Error(`invalid repository reference: ${arg}`);
     const id = `${ref.owner}/${ref.name}`;
-    if (await gh.repoExists(id)) {
-      throw new Error("repository already exists; use /ompsync link instead");
+    if (!(await gh.repoExists(id))) {
+      await gh.createPrivateRepo(id);
     }
-    await gh.createPrivateRepo(id);
     remote = gh.remoteUrl(id);
+  }
+
+  const gh = deps?.gh ?? defaultGh;
+  if (await gh.available()) {
+    await gh.setupGit(dir);
   }
 
   await git(["remote", "add", "origin", remote], dir);
@@ -291,6 +295,10 @@ export async function runLink(
   await ensureAttributes(dir);
   await ensureFilter(dir, config);
   await refreshMachineSidecar(dir, config);
+
+  if (await gh.available()) {
+    await gh.setupGit(dir);
+  }
 
   await git(["remote", "add", "origin", remote], dir);
   await git(["fetch", "origin"], dir);
