@@ -89,6 +89,16 @@ export async function fetchOrigin(dir: string): Promise<boolean> {
   }
 }
 
+export async function isRemoteReachable(dir: string): Promise<boolean> {
+  try {
+    await git(["ls-remote", "--heads", "origin"], dir, 8000);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+
 export async function integrateUpstream(upstream: string, dir: string): Promise<boolean> {
   try {
     await git(["merge", "--ff-only", upstream], dir);

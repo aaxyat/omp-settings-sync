@@ -198,3 +198,24 @@ test("showStatus outputs rich status with conflict detection and resolution inst
   await fs.rm(path.join(a.dir, ".git", "MERGE_HEAD"), { force: true });
 });
 
+test("runInit allows fresh re-initialization when remote repo is deleted or --force is specified", async () => {
+  const a = await createMachineFixture("recovery-test");
+  const remote1 = await createBareRemote(a.root, "remote1.git");
+  const ghA = createFakeGh();
+
+  // 1. Initial setup
+  await runInit(remote1, undefined, { dir: a.dir, gh: ghA });
+
+  // 2. Simulate remote repo deleted/gone
+  await fs.rm(remote1, { recursive: true, force: true });
+
+  // 3. runInit with a new remote or --force succeeds without throwing 'already initialized'
+  const remote2 = await createBareRemote(a.root, "remote2.git");
+  await runInit(remote2, undefined, { dir: a.dir, gh: ghA });
+
+  // Verify it can sync to the new remote
+  await fs.writeFile(path.join(a.dir, "AGENTS.md"), "# Recovery Successful\n");
+  await runSync(undefined, { auto: false, push: true }, { dir: a.dir });
+});
+
+

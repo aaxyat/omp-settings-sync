@@ -16,6 +16,7 @@ import {
   hasCommits,
   hasDotGit,
   integrateUpstream,
+  isRemoteReachable,
   isSyncableRepo,
   pushOrigin,
   upstreamRef,
@@ -118,7 +119,6 @@ export async function prepareCommit(deps?: Deps, ctx?: Ctx) {
   return config;
 }
 
-
 export async function commitLocalChanges(deps?: Deps, commitMessage?: string, ctx?: Ctx): Promise<boolean> {
   const dir = dirOf(deps);
   await prepareCommit(deps, ctx);
@@ -147,8 +147,17 @@ export async function runInit(
 ): Promise<void> {
   const dir = dirOf(deps);
   await fs.mkdir(dir, { recursive: true });
+
+  const isForce = /\b(--force|--fresh|-f)\b/i.test(arg);
+  const cleanArg = arg.replace(/\b(--force|--fresh|-f)\b/gi, "").trim();
+
   if (await isSyncableRepo(dir)) {
-    throw new Error("already initialized; use /ompsync sync");
+    const reachable = await isRemoteReachable(dir);
+    if (!isForce && reachable) {
+      throw new Error("already initialized with active remote; use '/ompsync sync' (or '/ompsync init --force' to start fresh)");
+    }
+    // Remote is deleted/unreachable or force requested: remove old origin
+    await git(["remote", "remove", "origin"], dir).catch(() => {});
   }
 
   // Check if vault encryption should be set up
@@ -179,7 +188,6 @@ export async function runInit(
     }
   }
 
-
   const config = await readConfig(deps, ctx);
   await ensureIgnoreRules(dir, config);
   if (!(await hasDotGit(dir))) {
@@ -194,7 +202,7 @@ export async function runInit(
 
   await commitLocalChanges(deps, "omp config: initial sync setup", ctx);
 
-  let remote = remoteFromArg(arg, "");
+  let remote = remoteFromArg(cleanArg, "");
   if (!remote) {
     const gh = deps?.gh ?? defaultGh;
     if (!(await gh.available())) {
@@ -202,8 +210,8 @@ export async function runInit(
       return;
     }
     const owner = await gh.currentUser();
-    const ref = parseRepoReference(arg || DEFAULT_SYNC_REPO_NAME, owner);
-    if (!ref) throw new Error(`invalid repository reference: ${arg}`);
+    const ref = parseRepoReference(cleanArg || DEFAULT_SYNC_REPO_NAME, owner);
+    if (!ref) throw new Error(`invalid repository reference: ${cleanArg}`);
     const id = `${ref.owner}/${ref.name}`;
     if (!(await gh.repoExists(id))) {
       await gh.createPrivateRepo(id);
@@ -276,12 +284,19 @@ export async function runLink(
   options?: { password?: string }
 ): Promise<void> {
   const dir = dirOf(deps);
+  const isForce = /\b(--force|--fresh|-f)\b/i.test(arg);
+  const cleanArg = arg.replace(/\b(--force|--fresh|-f)\b/gi, "").trim();
+
   if (await isSyncableRepo(dir)) {
-    throw new Error("already linked; use /ompsync sync");
+    const reachable = await isRemoteReachable(dir);
+    if (!isForce && reachable) {
+      throw new Error("already linked; use '/ompsync sync' (or '/ompsync link <url> --force' to re-link)");
+    }
+    await git(["remote", "remove", "origin"], dir).catch(() => {});
   }
 
   const gh = deps?.gh ?? defaultGh;
-  let remote = remoteFromArg(arg, "");
+  let remote = remoteFromArg(cleanArg, "");
   if (!remote) {
     if (!(await gh.available())) {
       notify(ctx, "omp-sync: provide a repo URL, or install and authenticate gh.", "warning", deps);
@@ -528,9 +543,20 @@ export async function runSync(
     if (!options.skipPull) {
       updateSyncProgress(ctx, 50, "Fetching remote updates...");
       if (!(await fetchOrigin(dir))) {
-        if (!options.auto) notify(ctx, "omp-sync: fetch failed; skipped pull/push.", "warning", deps);
+        const reachable = await isRemoteReachable(dir);
+        if (!reachable) {
+          notify(
+            ctx,
+            "omp-sync: remote repository is unreachable or was deleted on GitHub. Run '/ompsync init' to recreate it.",
+            "warning",
+            deps
+          );
+        } else if (!options.auto) {
+          notify(ctx, "omp-sync: fetch failed; skipped pull/push.", "warning", deps);
+        }
         return;
       }
+
 
       const upstream = await upstreamRef(dir);
       if (upstream) {
