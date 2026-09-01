@@ -25,6 +25,7 @@ export interface UIContext {
   hasUI?: boolean;
   ui?: {
     setStatus(key: string, status?: string): void;
+    setWorkingMessage?(message?: string): void;
     notify(message: string, level: Level): void;
     input?(title: string, placeholder?: string): Promise<string | undefined>;
     confirm?(title: string, message: string): Promise<boolean>;

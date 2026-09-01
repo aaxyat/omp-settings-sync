@@ -13,6 +13,8 @@ The agent directory (`~/.omp/agent` or `~/.omp/profiles/<profile>/agent`) **is**
 ## Features
 
 - 🔒 **Encrypted Credentials Vault:** Optional password-protected AES-256-GCM encrypted vault (`vault.enc`) to synchronize session tokens and logins (`auth.json`, `auth-broker.json`) safely across devices.
+- ⚡ **Instant Startup Sync & Progress Bar:** Automatically syncs immediately upon opening/starting Oh My Pi with a visual progress bar indicator (`🔄 Sync [█████░░░░░] 50% Fetching...`).
+- ⏱️ **1-Minute Background Sync:** Periodically checks every 60 seconds and syncs automatically whenever local or remote changes are detected.
 - 💻 **Cross-Platform Compatibility:** Full native support for Windows, macOS, and Linux with robust path normalization, CRLF/LF line-ending preservation, and safe process locking.
 - 🛡️ **4-Tier Security Guards:** Inverted allowlist `.gitignore`, local `.git/info/exclude`, pre-commit staging blocker, and tracked file scanner ensuring plaintext secrets, tokens, and SQLite databases (`agent.db*`, `models.db*`, `history.db*`) are never committed.
 - ⚙️ **Dual YAML & JSON Clean/Smudge Filter:** Machine-local settings (`images.urls.credentials`, `dev.autoqaPush.token`, `searxng.*`, `hindsight.*`, `auth.broker.*`, `setupVersion`, `shellPath`, etc.) are stripped from commits and preserved in local sidecars.
@@ -68,8 +70,9 @@ On your second device, run:
 - Any differing local allowed files are safely preserved as `<file>.local-backup`.
 
 ### 3. Daily Synchronization
-Synchronization is automatic:
-- **Session Start:** Checks rate limit (default every 5 minutes) and performs a background fetch, rebase, and push.
+Synchronization is fully automated:
+- **On Opening (Startup):** Automatically syncs and pulls remote updates on session start with progress bar feedback.
+- **Background Checks:** Runs every 60 seconds and synchronizes whenever local or remote changes are detected.
 - **Session Shutdown:** Performs a fast best-effort commit and push.
 
 ---
@@ -81,7 +84,7 @@ Synchronization is automatic:
 | `/ompsync init [url\|name]` | Initialize and push the first-machine repository (`OhMyPiSyncData`) |
 | `/ompsync link [url\|name]` | Link an existing sync repository on a new machine |
 | `/ompsync status` | Display repository state, branch, vault status, and security checks |
-| `/ompsync sync` | Commit, fetch, integrate remote changes (rebase), and push |
+| `/ompsync sync` | Commit, fetch, integrate remote changes (rebase), and push with progress indicator |
 | `/ompsync push` | Commit and push local changes without pulling |
 | `/ompsync pull` | Fetch and rebase remote updates |
 | `/ompsync unlock [passphrase]` | Decrypt credentials vault and restore local `auth.json` |
@@ -128,7 +131,7 @@ Create `~/.omp/agent/omp-sync.jsonc` (or `git-sync.jsonc`):
 
 ```jsonc
 {
-  "autoSyncIntervalMinutes": 5,
+  "autoSyncIntervalMinutes": 1,
   "includeHostname": true,
   "extraPaths": ["custom-safe-dir"],
   "warnOnPublicRemote": true,

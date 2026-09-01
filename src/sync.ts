@@ -41,7 +41,35 @@ import {
   writeVaultFile,
 } from "./vault.js";
 
-const STATUS_KEY = "omp-git-sync";
+export const STATUS_KEY = "omp-git-sync";
+
+export function renderProgressBar(percentage: number, stage: string): string {
+  const clamped = Math.max(0, Math.min(100, percentage));
+  const totalBars = 10;
+  const filledBars = Math.round((clamped / 100) * totalBars);
+  const emptyBars = totalBars - filledBars;
+  const bar = "█".repeat(filledBars) + "░".repeat(emptyBars);
+  return `🔄 Sync [${bar}] ${clamped}% ${stage}`;
+}
+
+export function updateSyncProgress(ctx: Ctx, percentage: number, stage: string): void {
+  if (ctx?.hasUI && ctx.ui) {
+    const text = renderProgressBar(percentage, stage);
+    ctx.ui.setStatus(STATUS_KEY, text);
+    if (typeof ctx.ui.setWorkingMessage === "function") {
+      ctx.ui.setWorkingMessage(text);
+    }
+  }
+}
+
+export function clearSyncProgress(ctx: Ctx): void {
+  if (ctx?.hasUI && ctx.ui) {
+    ctx.ui.setStatus(STATUS_KEY, undefined);
+    if (typeof ctx.ui.setWorkingMessage === "function") {
+      ctx.ui.setWorkingMessage(undefined);
+    }
+  }
+}
 
 function message(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -391,7 +419,7 @@ export async function runSync(
     return;
   }
 
-  if (ctx?.hasUI && ctx.ui) ctx.ui.setStatus(STATUS_KEY, "syncing");
+  updateSyncProgress(ctx, 10, "Preparing configuration...");
 
   try {
     await prepareCommit(deps, ctx);
@@ -400,12 +428,14 @@ export async function runSync(
       notify(ctx, `omp-sync: tracked sensitive files: ${tracked.join(", ")}. Remove with git rm --cached.`, "warning", deps);
     }
 
+    updateSyncProgress(ctx, 30, "Checking local changes...");
     const changed: string[] = [];
     if (await commitLocalChanges(deps, undefined, ctx)) {
       changed.push("committed local changes");
     }
 
     if (!options.skipPull) {
+      updateSyncProgress(ctx, 50, "Fetching remote updates...");
       if (!(await fetchOrigin(dir))) {
         if (!options.auto) notify(ctx, "omp-sync: fetch failed; skipped pull/push.", "warning", deps);
         return;
@@ -415,6 +445,7 @@ export async function runSync(
       if (upstream) {
         const { behind } = await countAheadBehind(upstream, dir);
         if (behind > 0) {
+          updateSyncProgress(ctx, 70, "Integrating remote changes...");
           if (!(await integrateUpstream(upstream, dir))) {
             throw new Error(`local and remote diverged with conflicts; rebase aborted in ${dir}`);
           }
@@ -437,6 +468,7 @@ export async function runSync(
     }
 
     if (options.push) {
+      updateSyncProgress(ctx, 90, "Pushing changes to remote...");
       const upstream = await upstreamRef(dir);
       if (!upstream) {
         if (await pushOrigin(true, dir)) changed.push("pushed");
@@ -448,13 +480,15 @@ export async function runSync(
       }
     }
 
+    updateSyncProgress(ctx, 100, "Complete");
+
     if (changed.some((x) => x.startsWith("pulled"))) {
       notify(ctx, `omp-sync: ${changed.join(", ")}. Run /reload to apply pulled config.`, "info", deps);
     } else if (!options.auto) {
       notify(ctx, changed.length ? `omp-sync: ${changed.join(", ")}.` : "omp-sync: already up to date.", "info", deps);
     }
   } finally {
-    if (ctx?.hasUI && ctx.ui) ctx.ui.setStatus(STATUS_KEY, undefined);
+    clearSyncProgress(ctx);
   }
 }
 

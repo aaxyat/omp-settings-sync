@@ -1,7 +1,7 @@
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { dirOf } from "./config.js";
 import { countAheadBehind, isSyncableRepo, pushOrigin, upstreamRef } from "./git.js";
-import { isSubagentChild, shouldAutoSync, withLock, writeSyncState } from "./lock.js";
+import { isSubagentChild, withLock, writeSyncState } from "./lock.js";
 import {
   checkAndBackgroundSync,
   commitLocalChanges,
@@ -93,8 +93,8 @@ export default function gitSyncExtension(pi: ExtensionAPI) {
   pi.registerCommand("ompsync", commandDef);
 
   pi.on("session_start", async (_event, ctx: ExtensionContext) => {
-    // 1. Immediate sync on startup if due
-    if (await shouldAutoSync()) {
+    // 1. Sync immediately on opening / startup
+    if (!isSubagentChild() && (await isSyncableRepo())) {
       try {
         await withLock(ctx, async () => {
           await writeSyncState({ lastAutoSyncAt: new Date().toISOString() });
@@ -102,7 +102,7 @@ export default function gitSyncExtension(pi: ExtensionAPI) {
         });
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
-        if (ctx.hasUI) ctx.ui.notify(`omp-sync skipped: ${msg}`, "warning");
+        if (ctx.hasUI && ctx.ui) ctx.ui.notify(`omp-sync skipped: ${msg}`, "warning");
       }
     }
 
