@@ -7,10 +7,11 @@ import { dirOf } from "./config.js";
 const exec = promisify(execFile);
 
 export function gitEnv(dir: string): NodeJS.ProcessEnv {
+  const ceiling = path.dirname(path.resolve(dir)).replaceAll("\\", "/");
   return {
     ...process.env,
     GIT_TERMINAL_PROMPT: "0",
-    GIT_CEILING_DIRECTORIES: path.dirname(dir),
+    GIT_CEILING_DIRECTORIES: ceiling,
   };
 }
 
@@ -55,7 +56,7 @@ export async function isSyncableRepo(dir = dirOf()): Promise<boolean> {
   if (!(await hasDotGit(dir))) return false;
   try {
     const { stdout } = await git(["remote"], dir);
-    return stdout.split("\n").includes("origin");
+    return stdout.split(/\r?\n/).includes("origin");
   } catch {
     return false;
   }

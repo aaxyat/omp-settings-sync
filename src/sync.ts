@@ -189,6 +189,13 @@ async function defaultBranch(dir: string): Promise<string> {
   }
 }
 
+async function safeRenameBackup(target: string, backupPath: string): Promise<void> {
+  try {
+    await fs.rm(backupPath, { force: true });
+    await fs.rename(target, backupPath);
+  } catch {}
+}
+
 async function backupConflicts(dir: string, branch: string): Promise<string[]> {
   const { stdout } = await git(["ls-tree", "-r", "--name-only", "-z", `origin/${branch}`], dir);
   const backups: string[] = [];
@@ -204,7 +211,8 @@ async function backupConflicts(dir: string, branch: string): Promise<string[]> {
       .then((x) => x.stdout)
       .catch(() => undefined);
     if (local && remote && !local.equals(remote)) {
-      await fs.rename(target, `${target}.local-backup`);
+      const backupPath = `${target}.local-backup`;
+      await safeRenameBackup(target, backupPath);
       backups.push(rel);
     }
   }
@@ -265,14 +273,17 @@ export async function runLink(
   } catch (error) {
     const output = message(error);
     const refused =
-      output.match(/would be overwritten by checkout:\n([\s\S]*?)Please move or remove/)?.[1]?.split("\n").map((l) => l.trim()).filter(Boolean) ?? [];
+      output
+        .match(/would be overwritten by checkout:\n([\s\S]*?)Please move or remove/)?.[1]
+        ?.split(/\r?\n/)
+        .map((l) => l.trim())
+        .filter(Boolean) ?? [];
     for (const relative of refused) {
       if (isDenied(relative)) continue;
       const target = path.join(dir, relative);
-      try {
-        await fs.rename(target, `${target}.local-backup`);
-        backups.push(relative);
-      } catch {}
+      const backupPath = `${target}.local-backup`;
+      await safeRenameBackup(target, backupPath);
+      backups.push(relative);
     }
     if (refused.length) {
       try {

@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { GitSyncConfig } from "./config.js";
+import type { OmpSyncConfig } from "./config.js";
 import { DEFAULT_MACHINE_LOCAL_JSON, DEFAULT_MACHINE_LOCAL_YAML } from "./config.js";
 import { git, hasDotGit } from "./git.js";
 
@@ -8,11 +8,11 @@ export function stateDir(dir: string): string {
   return path.join(dir, ".git-sync");
 }
 
-export function machineJsonKeys(config: GitSyncConfig): string[] {
+export function machineJsonKeys(config: OmpSyncConfig): string[] {
   return config.machineLocalSettings ?? DEFAULT_MACHINE_LOCAL_JSON;
 }
 
-export function machineYamlKeys(config: GitSyncConfig): string[] {
+export function machineYamlKeys(config: OmpSyncConfig): string[] {
   return config.machineLocalYamlKeys ?? DEFAULT_MACHINE_LOCAL_YAML;
 }
 
@@ -42,6 +42,7 @@ function cleanYamlLine(line, keys) {
 }
 
 try {
+  const lineEnding = text.includes("\\r\\n") ? "\\r\\n" : "\\n";
   if (format === "yaml") {
     if (mode === "clean") {
       const lines = text.split(/\\r?\\n/);
@@ -69,14 +70,17 @@ try {
 
         filtered.push(line);
       }
-      process.stdout.write(filtered.join("\\n"));
+      process.stdout.write(filtered.join(lineEnding));
     } else if (mode === "smudge") {
       const sidecarPath = new URL("config.machine.yml", import.meta.url);
       let sidecarText = "";
       try {
         sidecarText = fs.readFileSync(sidecarPath, "utf8");
       } catch {}
-      const combined = (text.trim() ? text.trim() + "\\n" : "") + sidecarText.trim() + (sidecarText.trim() ? "\\n" : "");
+      const combined =
+        (text.trim() ? text.trim() + lineEnding : "") +
+        sidecarText.trim() +
+        (sidecarText.trim() ? lineEnding : "");
       process.stdout.write(combined);
     } else {
       process.stdout.write(raw);
@@ -87,14 +91,14 @@ try {
 
     if (mode === "clean") {
       for (const key of jsonKeys) delete value[key];
-      process.stdout.write(JSON.stringify(value, null, 2) + "\\n");
+      process.stdout.write(JSON.stringify(value, null, 2) + lineEnding);
     } else if (mode === "smudge") {
       const sidecarPath = new URL("settings.machine.json", import.meta.url);
       let sidecar = {};
       try {
         sidecar = JSON.parse(fs.readFileSync(sidecarPath, "utf8"));
       } catch {}
-      process.stdout.write(JSON.stringify({ ...value, ...sidecar }, null, 2) + "\\n");
+      process.stdout.write(JSON.stringify({ ...value, ...sidecar }, null, 2) + lineEnding);
     } else {
       process.stdout.write(raw);
     }
@@ -136,7 +140,13 @@ async function gitConfigValue(key: string, dir: string): Promise<string | undefi
   }
 }
 
-export async function ensureFilter(dir: string, config: GitSyncConfig = {}): Promise<void> {
+function formatFilterCommand(scriptPath: string, mode: string, format: string): string {
+  const nodeExec = process.execPath.replaceAll("\\", "/");
+  const script = scriptPath.replaceAll("\\", "/");
+  return `"${nodeExec}" "${script}" ${mode} ${format}`;
+}
+
+export async function ensureFilter(dir: string, config: OmpSyncConfig = {}): Promise<void> {
   if (!(await hasDotGit(dir))) return;
 
   await fs.mkdir(stateDir(dir), { recursive: true });
@@ -151,16 +161,12 @@ export async function ensureFilter(dir: string, config: GitSyncConfig = {}): Pro
     await fs.writeFile(scriptPath, source);
   }
 
-  const quote = (val: string) => `'${val.replaceAll("'", "'\\''")}'`;
-  const nodeExec = quote(process.execPath);
-  const scriptArg = quote(scriptPath);
-
   const configs: Record<string, string> = {
-    "filter.omp-config-sync-yaml.clean": `${nodeExec} ${scriptArg} clean yaml`,
-    "filter.omp-config-sync-yaml.smudge": `${nodeExec} ${scriptArg} smudge yaml`,
+    "filter.omp-config-sync-yaml.clean": formatFilterCommand(scriptPath, "clean", "yaml"),
+    "filter.omp-config-sync-yaml.smudge": formatFilterCommand(scriptPath, "smudge", "yaml"),
     "filter.omp-config-sync-yaml.required": "false",
-    "filter.omp-config-sync-json.clean": `${nodeExec} ${scriptArg} clean json`,
-    "filter.omp-config-sync-json.smudge": `${nodeExec} ${scriptArg} smudge json`,
+    "filter.omp-config-sync-json.clean": formatFilterCommand(scriptPath, "clean", "json"),
+    "filter.omp-config-sync-json.smudge": formatFilterCommand(scriptPath, "smudge", "json"),
     "filter.omp-config-sync-json.required": "false",
   };
 
@@ -179,7 +185,7 @@ export async function ensureFilter(dir: string, config: GitSyncConfig = {}): Pro
   }
 }
 
-export async function refreshMachineSidecar(dir: string, config: GitSyncConfig = {}): Promise<void> {
+export async function refreshMachineSidecar(dir: string, config: OmpSyncConfig = {}): Promise<void> {
   await fs.mkdir(stateDir(dir), { recursive: true });
 
   // 1. JSON sidecar

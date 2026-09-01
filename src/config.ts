@@ -4,7 +4,7 @@ import path from "node:path";
 import type { GhClient } from "./gh.js";
 import { isDenied } from "./security.js";
 
-export interface GitSyncConfig {
+export interface OmpSyncConfig {
   autoSyncIntervalMinutes?: number;
   includeHostname?: boolean;
   extraPaths?: string[];
@@ -63,15 +63,16 @@ export function dirOf(deps?: Deps): string {
   if (deps?.dir) return path.resolve(deps.dir);
   const explicit = process.env.PI_CODING_AGENT_DIR?.trim();
   if (explicit) {
-    return explicit === "~" || explicit.startsWith("~/")
-      ? path.join(os.homedir(), explicit.slice(2))
-      : path.resolve(explicit);
+    if (explicit === "~" || explicit.startsWith("~/") || explicit.startsWith("~\\")) {
+      return path.resolve(path.join(os.homedir(), explicit.slice(2)));
+    }
+    return path.resolve(explicit);
   }
   const profile = process.env.OMP_PROFILE?.trim();
   if (profile) {
-    return path.join(os.homedir(), ".omp", "profiles", profile, "agent");
+    return path.resolve(path.join(os.homedir(), ".omp", "profiles", profile, "agent"));
   }
-  return path.join(os.homedir(), ".omp", "agent");
+  return path.resolve(path.join(os.homedir(), ".omp", "agent"));
 }
 
 export function stripJsonComments(input: string): string {
@@ -92,8 +93,13 @@ export function stripJsonComments(input: string): string {
       quote = c;
       out += c;
     } else if (c === "/" && next === "/") {
-      while (i < input.length && input[i] !== "\n") i++;
-      out += "\n";
+      while (i < input.length && input[i] !== "\n" && input[i] !== "\r") i++;
+      if (input[i] === "\r" && input[i + 1] === "\n") {
+        i++;
+        out += "\r\n";
+      } else {
+        out += "\n";
+      }
     } else if (c === "/" && next === "*") {
       i += 2;
       while (i < input.length && !(input[i] === "*" && input[i + 1] === "/")) i++;
@@ -106,7 +112,8 @@ export function stripJsonComments(input: string): string {
 }
 
 export function isValidExtraPath(entry: string): boolean {
-  return entry.trim() !== "" && !entry.includes("..") && !path.isAbsolute(entry) && !isDenied(entry);
+  const trimmed = entry.trim();
+  return trimmed !== "" && !trimmed.includes("..") && !path.isAbsolute(trimmed) && !isDenied(trimmed);
 }
 
 export async function readConfigFile(dir: string): Promise<string | undefined> {
@@ -118,13 +125,13 @@ export async function readConfigFile(dir: string): Promise<string | undefined> {
   return undefined;
 }
 
-export async function readConfig(deps?: Deps, ctx?: Ctx): Promise<GitSyncConfig> {
+export async function readConfig(deps?: Deps, ctx?: Ctx): Promise<OmpSyncConfig> {
   const dir = dirOf(deps);
   const rawText = await readConfigFile(dir);
   if (!rawText) return {};
 
   try {
-    const raw = JSON.parse(stripJsonComments(rawText)) as GitSyncConfig;
+    const raw = JSON.parse(stripJsonComments(rawText)) as OmpSyncConfig;
     const extras = (raw.extraPaths ?? []).filter(isValidExtraPath);
 
     let machineLocalSettings: string[] | undefined;

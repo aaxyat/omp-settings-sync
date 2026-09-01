@@ -4,7 +4,7 @@
 [![CI](https://github.com/aaxyat/omp-settings-sync/actions/workflows/ci.yml/badge.svg)](https://github.com/aaxyat/omp-settings-sync/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-Securely sync your [Oh My Pi](https://omp.sh) (`~/.omp/agent`) configuration, session tokens, and login credentials across machines through a private Git remote (`OhMyPiSyncData`) — automatically, with 4-tier guards keeping plaintext secrets, databases, and runtime state out.
+Securely sync your [Oh My Pi](https://omp.sh) (`~/.omp/agent`) configuration, session tokens, and login credentials across devices (Linux, macOS, Windows) through a private Git remote (`OhMyPiSyncData`) — automatically, with 4-tier guards keeping plaintext secrets, databases, and runtime state out.
 
 The agent directory (`~/.omp/agent` or `~/.omp/profiles/<profile>/agent`) **is** the repository, ensuring transparent version history with zero shadow staging copies.
 
@@ -13,6 +13,7 @@ The agent directory (`~/.omp/agent` or `~/.omp/profiles/<profile>/agent`) **is**
 ## Features
 
 - 🔒 **Encrypted Credentials Vault:** Optional password-protected AES-256-GCM encrypted vault (`vault.enc`) to synchronize session tokens and logins (`auth.json`, `auth-broker.json`) safely across devices.
+- 💻 **Cross-Platform Compatibility:** Full native support for Windows, macOS, and Linux with robust path normalization, CRLF/LF line-ending preservation, and safe process locking.
 - 🛡️ **4-Tier Security Guards:** Inverted allowlist `.gitignore`, local `.git/info/exclude`, pre-commit staging blocker, and tracked file scanner ensuring plaintext secrets, tokens, and SQLite databases (`agent.db*`, `models.db*`, `history.db*`) are never committed.
 - ⚙️ **Dual YAML & JSON Clean/Smudge Filter:** Machine-local settings (`images.urls.credentials`, `dev.autoqaPush.token`, `searxng.*`, `hindsight.*`, `auth.broker.*`, `setupVersion`, `shellPath`, etc.) are stripped from commits and preserved in local sidecars.
 - 🚀 **Zero-Touch GitHub Setup:** Automatically creates and discovers private `OhMyPiSyncData` repositories using authenticated GitHub CLI (`gh`).
@@ -57,8 +58,8 @@ Without `gh`, specify a private remote:
 /ompsync init git@github.com:you/OhMyPiSyncData.git
 ```
 
-### 2. Linking on New Devices
-On your second machine, run:
+### 2. Linking on New Devices (Windows / macOS / Linux)
+On your second device, run:
 ```text
 /ompsync link
 ```
@@ -88,7 +89,13 @@ Synchronization is automatic:
 | `/ompsync vault enable [passphrase]` | Enable encrypted credentials vault and encrypt `auth.json` |
 | `/ompsync vault disable` | Disable and remove credentials vault from repository |
 
-*(Note: `/gitsync` is registered as a direct alias for backwards compatibility.)*
+---
+
+## Cross-Platform Compatibility
+
+- **Windows:** Supports Windows backslashes in paths, drive letters (`C:\...`), POSIX Git ceiling directory normalization, CRLF line endings, and safe file locking without file descriptor deadlocks.
+- **macOS:** Native support for macOS home directories (`/Users/...`) and case-insensitive APFS/HFS+ file systems.
+- **Linux:** Standard POSIX support with case-sensitive ext4 filesystem rules.
 
 ---
 

@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { GitSyncConfig } from "./config.js";
+import type { OmpSyncConfig } from "./config.js";
 import { isValidExtraPath } from "./config.js";
 import { git } from "./git.js";
 
@@ -139,7 +139,7 @@ function allowRules(entry: string): string[] {
   return rules;
 }
 
-export async function ensureIgnoreRules(dir: string, config: GitSyncConfig = {}): Promise<void> {
+export async function ensureIgnoreRules(dir: string, config: OmpSyncConfig = {}): Promise<void> {
   const file = path.join(dir, ".gitignore");
   let existing = "";
   try {

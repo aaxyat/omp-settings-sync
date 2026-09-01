@@ -53,6 +53,19 @@ export async function shouldAutoSync(deps?: Deps): Promise<boolean> {
   return Date.now() - Date.parse(state.lastAutoSyncAt) >= intervalMs;
 }
 
+function isProcessAlive(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err: unknown) {
+    if (err && typeof err === "object" && "code" in err && err.code === "EPERM") {
+      return true;
+    }
+    return false;
+  }
+}
+
 export async function withLock<T>(ctx: Ctx, fn: () => Promise<T>, deps?: Deps): Promise<T | undefined> {
   const dir = dirOf(deps);
   await fs.mkdir(stateDir(dir), { recursive: true });
@@ -75,8 +88,7 @@ export async function withLock<T>(ctx: Ctx, fn: () => Promise<T>, deps?: Deps): 
         "startedAt" in lockData &&
         typeof lockData.startedAt === "string"
       ) {
-        if (Number.isInteger(lockData.pid) && lockData.pid > 0) {
-          process.kill(lockData.pid, 0);
+        if (isProcessAlive(lockData.pid)) {
           if (Date.now() - Date.parse(lockData.startedAt) < 600_000) {
             return undefined;
           }

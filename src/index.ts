@@ -88,7 +88,6 @@ export default function gitSyncExtension(pi: ExtensionAPI) {
   };
 
   pi.registerCommand("ompsync", commandDef);
-  pi.registerCommand("gitsync", commandDef);
 
   pi.on("session_start", async (_event, ctx: ExtensionContext) => {
     if (await shouldAutoSync()) {
