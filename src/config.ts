@@ -11,7 +11,10 @@ export interface OmpSyncConfig {
   warnOnPublicRemote?: boolean;
   machineLocalSettings?: string[];
   machineLocalYamlKeys?: string[];
+  preferRemote?: boolean;
+  discardLocalOnConflict?: boolean;
 }
+
 
 export type Level = "info" | "warning" | "error";
 

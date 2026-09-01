@@ -197,7 +197,32 @@ export async function saveSensitiveHash(dir: string, hash: string): Promise<void
 
 export async function hasSensitiveChanges(dir: string): Promise<boolean> {
   const currentHash = await hashSensitiveFiles(dir);
-  const savedHash = await getSavedSensitiveHash(dir);
+  let savedHash = await getSavedSensitiveHash(dir);
+
+  // If savedHash is missing but a vault file exists, check if vault.enc already contains current files
+  if (!savedHash && currentHash && (await hasVaultFile(dir))) {
+    const password = await getCachedVaultPassword(dir);
+    const vaultRaw = await readVaultFile(dir);
+    if (password && vaultRaw) {
+      try {
+        const payload = decryptPayload(vaultRaw, password);
+        const hash = crypto.createHash("sha256");
+        let found = false;
+        for (const rel of [...SYNCABLE_SENSITIVE_FILES].sort()) {
+          if (payload.files[rel] !== undefined) {
+            hash.update(`${rel}:`);
+            hash.update(payload.files[rel]!);
+            found = true;
+          }
+        }
+        const payloadHash = found ? hash.digest("hex") : "";
+        if (payloadHash === currentHash) {
+          await saveSensitiveHash(dir, currentHash);
+          return false;
+        }
+      } catch {}
+    }
+  }
 
   // If no sensitive files exist currently and none were saved, no changes
   if (!currentHash && !savedHash) return false;
@@ -205,6 +230,7 @@ export async function hasSensitiveChanges(dir: string): Promise<boolean> {
   // If saved hash matches current hash, no changes
   return currentHash !== savedHash;
 }
+
 
 export async function packSensitiveFiles(dir: string): Promise<VaultPayload> {
   const files: Record<string, string> = {};

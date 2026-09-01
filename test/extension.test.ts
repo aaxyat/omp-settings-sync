@@ -27,9 +27,11 @@ test("extension registers /ompsync command and session listeners", () => {
 
   const def = commands["ompsync"] as { getArgumentCompletions(prefix: string): Array<{ value: string }> | null };
   const rootCompletions = def.getArgumentCompletions("sy");
-  assert.deepEqual(rootCompletions, [{ value: "sync", label: "sync" }]);
+  const resetCompletions = def.getArgumentCompletions("re");
+  assert.deepEqual(resetCompletions, [{ value: "reset", label: "reset" }]);
 
   const vaultCompletions = def.getArgumentCompletions("vault en");
   assert.deepEqual(vaultCompletions, [{ value: "vault enable", label: "vault enable" }]);
 });
+
 

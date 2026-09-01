@@ -512,9 +512,62 @@ export async function showStatus(ctx: Ctx, deps?: Deps): Promise<void> {
 }
 
 
+export async function runReset(ctx: Ctx, deps?: Deps): Promise<void> {
+  const dir = dirOf(deps);
+  if (!(await isSyncableRepo(dir))) {
+    throw new Error(`no git repo in ${dir}. Run /ompsync init.`);
+  }
+
+  updateSyncProgress(ctx, 20, "Fetching remote repository...");
+  if (!(await fetchOrigin(dir))) {
+    throw new Error("failed to fetch from remote origin");
+  }
+
+  const branch = await defaultBranch(dir);
+  updateSyncProgress(ctx, 50, `Resetting to origin/${branch}...`);
+
+  // Discard all local changes, commits, and conflicts; force reset to remote branch
+  await git(["reset", "--hard", `origin/${branch}`], dir);
+  await git(["clean", "-fd"], dir).catch(() => {});
+
+  updateSyncProgress(ctx, 80, "Restoring configuration & vault...");
+  const config = await readConfig(deps, ctx);
+  await ensureIgnoreRules(dir, config);
+  await ensureInfoExclude(dir);
+  await ensureAttributes(dir);
+  await ensureFilter(dir, config);
+  await refreshMachineSidecar(dir, config);
+
+  let vaultRestored = false;
+  const vaultStatus = await getVaultStatus(dir);
+  if (vaultStatus === "unlocked") {
+    const password = await getCachedVaultPassword(dir);
+    const vaultRaw = await readVaultFile(dir);
+    if (password && vaultRaw) {
+      try {
+        const payload = decryptPayload(vaultRaw, password);
+        await unpackSensitiveFiles(dir, payload);
+        vaultRestored = true;
+      } catch {}
+    }
+  }
+
+  updateSyncProgress(ctx, 100, "Complete");
+  clearSyncProgress(ctx);
+
+  notify(
+    ctx,
+    `omp-sync: reset complete. Discarded all local changes and synced from origin/${branch}.${
+      vaultRestored ? " (Credentials vault restored)" : ""
+    } Run /reload to apply.`,
+    "info",
+    deps
+  );
+}
+
 export async function runSync(
   ctx: Ctx,
-  options: { auto: boolean; push: boolean; skipPull?: boolean },
+  options: { auto: boolean; push: boolean; skipPull?: boolean; discardLocal?: boolean },
   deps?: Deps
 ): Promise<void> {
   const dir = dirOf(deps);
@@ -523,6 +576,13 @@ export async function runSync(
       notify(ctx, `omp-sync: no git repo with an 'origin' remote in ${dir}. Run /ompsync init.`, "warning", deps);
     }
     return;
+  }
+
+  const config = await readConfig(deps, ctx);
+  const discardLocal = options.discardLocal || config.preferRemote === true;
+
+  if (discardLocal) {
+    return runReset(ctx, deps);
   }
 
   updateSyncProgress(ctx, 10, "Preparing configuration...");
@@ -557,14 +617,17 @@ export async function runSync(
         return;
       }
 
-
       const upstream = await upstreamRef(dir);
       if (upstream) {
         const { behind } = await countAheadBehind(upstream, dir);
         if (behind > 0) {
           updateSyncProgress(ctx, 70, "Integrating remote changes...");
           if (!(await integrateUpstream(upstream, dir))) {
-            throw new Error(`local and remote diverged with conflicts; rebase aborted in ${dir}`);
+            if (config.discardLocalOnConflict) {
+              await git(["rebase", "--abort"], dir).catch(() => {});
+              return runReset(ctx, deps);
+            }
+            throw new Error(`local and remote diverged with conflicts; rebase aborted in ${dir}. Run '/ompsync reset' to discard local changes and sync from remote.`);
           }
           changed.push("pulled updates");
 
@@ -608,6 +671,7 @@ export async function runSync(
     clearSyncProgress(ctx);
   }
 }
+
 
 export async function checkAndBackgroundSync(ctx: Ctx, deps?: Deps): Promise<boolean> {
   const dir = dirOf(deps);

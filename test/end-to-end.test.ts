@@ -218,4 +218,39 @@ test("runInit allows fresh re-initialization when remote repo is deleted or --fo
   await runSync(undefined, { auto: false, push: true }, { dir: a.dir });
 });
 
+test("runReset and runSync with discardLocal forcefully discard local changes and sync remote vault", async () => {
+  const a = await createMachineFixture("reset-a");
+  const remote = await createBareRemote(a.root);
+  const ghA = createFakeGh();
+  const pass = "ResetPass123!";
+
+  await fs.writeFile(path.join(a.dir, "auth.json"), JSON.stringify({ token: "remote-token-gold" }));
+  await runInit(remote, undefined, { dir: a.dir, gh: ghA }, { password: pass });
+
+  const b = await createMachineFixture("reset-b");
+  const ghB = createFakeGh();
+  await runLink(remote, undefined, { dir: b.dir, gh: ghB }, { password: pass });
+
+  // Machine B makes dirty/conflicting local changes to config and auth
+  await fs.writeFile(path.join(b.dir, "AGENTS.md"), "# Stray Local PC Edits\n");
+  await fs.writeFile(path.join(b.dir, "auth.json"), JSON.stringify({ token: "local-corrupt-token" }));
+
+  // Machine A updates token on remote
+  await fs.writeFile(path.join(a.dir, "auth.json"), JSON.stringify({ token: "remote-token-updated" }));
+  await runSync(undefined, { auto: false, push: true }, { dir: a.dir });
+
+  // Machine B runs sync with discardLocal / reset
+  const { runReset } = await import("../src/sync.js");
+  await runReset(undefined, { dir: b.dir });
+
+  // Verify Machine B cleanly matches remote
+  const authB = JSON.parse(await fs.readFile(path.join(b.dir, "auth.json"), "utf8")) as { token: string };
+  assert.equal(authB.token, "remote-token-updated");
+  assert.equal(
+    (await fs.readFile(path.join(b.dir, "AGENTS.md"), "utf8")).replace(/\r\n/g, "\n"),
+    "# Agent Instructions\n"
+  );
+});
+
+
 

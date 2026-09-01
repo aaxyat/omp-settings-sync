@@ -11,6 +11,7 @@ import {
   runInit,
   runLink,
   runLockVault,
+  runReset,
   runSync,
   runUnlockVault,
   showStatus,
@@ -36,14 +37,19 @@ export default function gitSyncExtension(pi: ExtensionAPI) {
         if (command === "status") {
           return showStatus(ctx);
         }
+        if (command === "reset" || command === "restore") {
+          return runReset(ctx);
+        }
         if (command === "sync") {
-          return runSync(ctx, { auto: false, push: true });
+          const discardLocal = /\b(--discard-local|--force|-f|--hard)\b/i.test(arg);
+          return runSync(ctx, { auto: false, push: !discardLocal, discardLocal });
         }
         if (command === "push") {
           return runSync(ctx, { auto: false, push: true, skipPull: true });
         }
         if (command === "pull") {
-          return runSync(ctx, { auto: false, push: false });
+          const discardLocal = /\b(--discard-local|--force|-f|--hard)\b/i.test(arg);
+          return runSync(ctx, { auto: false, push: false, discardLocal });
         }
         if (command === "unlock") {
           return runUnlockVault(arg || undefined, ctx);
@@ -71,7 +77,7 @@ export default function gitSyncExtension(pi: ExtensionAPI) {
           }
           throw new Error("Unknown vault subcommand. Usage: /ompsync vault [enable|disable|unlock|lock|status]");
         }
-        throw new Error("Unknown command. Usage: /ompsync [init|link|status|sync|push|pull|unlock|lock|vault]");
+        throw new Error("Unknown command. Usage: /ompsync [init|link|status|sync|reset|push|pull|unlock|lock|vault]");
       });
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
@@ -89,13 +95,14 @@ export default function gitSyncExtension(pi: ExtensionAPI) {
           .filter((x) => x.value.startsWith(trimmed));
         return subEntries.length ? subEntries : null;
       }
-      const entries = ["init", "link", "status", "sync", "push", "pull", "unlock", "lock", "vault"]
+      const entries = ["init", "link", "status", "sync", "reset", "push", "pull", "unlock", "lock", "vault"]
         .map((value) => ({ value, label: value }))
         .filter((x) => x.value.startsWith(prefix.trim()));
       return entries.length ? entries : null;
     },
     handler,
   };
+
 
   pi.registerCommand("ompsync", commandDef);
   pi.registerCommand("gitsync", commandDef);
