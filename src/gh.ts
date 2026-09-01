@@ -48,13 +48,24 @@ export function parseRepoReference(input: string, fallbackOwner: string): { owne
   return undefined;
 }
 
+import path from "node:path";
+
 export function remoteFromArg(arg: string, fallbackOwner: string): string | undefined {
-  if (/^(https?|ssh):\/\//.test(arg) || /^git@/.test(arg) || arg.startsWith("/") || arg.startsWith(".")) {
+  if (
+    /^(https?|ssh):\/\//.test(arg) ||
+    /^git@/.test(arg) ||
+    arg.startsWith("/") ||
+    arg.startsWith(".") ||
+    arg.startsWith("\\") ||
+    /^[a-zA-Z]:[\\/]/.test(arg) ||
+    path.isAbsolute(arg)
+  ) {
     return arg;
   }
   const ref = parseRepoReference(arg, fallbackOwner);
   return ref ? `https://github.com/${ref.owner}/${ref.name}.git` : undefined;
 }
+
 
 export const defaultGh: GhClient = {
   async available() {

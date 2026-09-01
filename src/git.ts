@@ -114,10 +114,17 @@ export async function pushOrigin(first: boolean, dir: string): Promise<boolean> 
   }
 }
 
+import { getVaultStatus, hasSensitiveChanges } from "./vault.js";
+
 export async function hasLocalChanges(dir = dirOf()): Promise<boolean> {
   try {
     const { stdout } = await git(["status", "--porcelain"], dir);
-    return stdout.trim().length > 0;
+    if (stdout.trim().length > 0) return true;
+    const vaultStatus = await getVaultStatus(dir);
+    if (vaultStatus === "unlocked") {
+      return await hasSensitiveChanges(dir);
+    }
+    return false;
   } catch {
     return false;
   }
@@ -139,3 +146,65 @@ export async function hasAnyChanges(dir = dirOf()): Promise<boolean> {
   if (await hasLocalChanges(dir)) return true;
   return await hasRemoteChanges(dir);
 }
+
+export interface ConflictState {
+  hasConflicts: boolean;
+  inRebase: boolean;
+  inMerge: boolean;
+  conflictedFiles: string[];
+}
+
+export async function getConflictState(dir: string): Promise<ConflictState> {
+  let inRebase = false;
+  let inMerge = false;
+  const conflictedFiles: string[] = [];
+
+  for (const rebaseDir of [".git/rebase-merge", ".git/rebase-apply"]) {
+    try {
+      await fs.access(path.join(dir, rebaseDir));
+      inRebase = true;
+      break;
+    } catch {}
+  }
+
+  try {
+    await fs.access(path.join(dir, ".git", "MERGE_HEAD"));
+    inMerge = true;
+  } catch {}
+
+  try {
+    const { stdout } = await git(["status", "--porcelain"], dir);
+    for (const line of stdout.split(/\r?\n/)) {
+      if (!line.trim()) continue;
+      const code = line.slice(0, 2);
+      const filename = line.slice(3).trim();
+      if (["UU", "AA", "UD", "DU", "DD", "AU", "UA"].includes(code) || code.includes("U")) {
+        conflictedFiles.push(filename);
+      }
+    }
+  } catch {}
+
+  const hasConflicts = inRebase || inMerge || conflictedFiles.length > 0;
+  return { hasConflicts, inRebase, inMerge, conflictedFiles };
+}
+
+export async function getSyncDivergence(dir: string): Promise<{
+  branch: string;
+  upstream?: string;
+  ahead: number;
+  behind: number;
+}> {
+  let branch = "main";
+  try {
+    branch = (await git(["rev-parse", "--abbrev-ref", "HEAD"], dir)).stdout.trim();
+  } catch {}
+
+  const upstream = await upstreamRef(dir);
+  if (!upstream) {
+    return { branch, upstream: undefined, ahead: 0, behind: 0 };
+  }
+
+  const { ahead, behind } = await countAheadBehind(upstream, dir);
+  return { branch, upstream, ahead, behind };
+}
+

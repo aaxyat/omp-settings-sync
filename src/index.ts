@@ -82,6 +82,13 @@ export default function gitSyncExtension(pi: ExtensionAPI) {
   const commandDef = {
     description: "Securely sync Oh My Pi config and encrypted credentials vault",
     getArgumentCompletions: (prefix: string) => {
+      const trimmed = prefix.trimStart();
+      if (trimmed.startsWith("vault ")) {
+        const subEntries = ["enable", "disable", "unlock", "lock", "status"]
+          .map((sub) => ({ value: `vault ${sub}`, label: `vault ${sub}` }))
+          .filter((x) => x.value.startsWith(trimmed));
+        return subEntries.length ? subEntries : null;
+      }
       const entries = ["init", "link", "status", "sync", "push", "pull", "unlock", "lock", "vault"]
         .map((value) => ({ value, label: value }))
         .filter((x) => x.value.startsWith(prefix.trim()));
@@ -91,6 +98,8 @@ export default function gitSyncExtension(pi: ExtensionAPI) {
   };
 
   pi.registerCommand("ompsync", commandDef);
+  pi.registerCommand("gitsync", commandDef);
+
 
   pi.on("session_start", async (_event, ctx: ExtensionContext) => {
     // 1. Sync immediately on opening / startup

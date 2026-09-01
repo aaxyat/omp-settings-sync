@@ -19,7 +19,7 @@ test("dirOf resolves ~/.omp/agent by default, respects OMP_PROFILE and PI_CODING
     process.env.PI_CODING_AGENT_DIR = "~/custom-agent";
     assert.equal(dirOf(), path.join(os.homedir(), "custom-agent"));
 
-    assert.equal(dirOf({ dir: "/explicit/dir" }), "/explicit/dir");
+    assert.equal(dirOf({ dir: "/explicit/dir" }), path.resolve("/explicit/dir"));
   } finally {
     if (originalProfile) process.env.OMP_PROFILE = originalProfile; else delete process.env.OMP_PROFILE;
     if (originalPiDir) process.env.PI_CODING_AGENT_DIR = originalPiDir; else delete process.env.PI_CODING_AGENT_DIR;

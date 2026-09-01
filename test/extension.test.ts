@@ -21,7 +21,15 @@ test("extension registers /ompsync command and session listeners", () => {
   gitSyncExtension(mockPi as ExtensionAPI);
 
   assert.ok(commands["ompsync"]);
-  assert.equal(commands["gitsync"], undefined);
+  assert.ok(commands["gitsync"]);
   assert.ok(events["session_start"]?.length);
   assert.ok(events["session_shutdown"]?.length);
+
+  const def = commands["ompsync"] as { getArgumentCompletions(prefix: string): Array<{ value: string }> | null };
+  const rootCompletions = def.getArgumentCompletions("sy");
+  assert.deepEqual(rootCompletions, [{ value: "sync", label: "sync" }]);
+
+  const vaultCompletions = def.getArgumentCompletions("vault en");
+  assert.deepEqual(vaultCompletions, [{ value: "vault enable", label: "vault enable" }]);
 });
+

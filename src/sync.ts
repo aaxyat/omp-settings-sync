@@ -8,6 +8,8 @@ import { DEFAULT_SYNC_REPO_NAME, defaultGh, LIKELY_SYNC_REPO_NAMES, parseRepoRef
 import {
   countAheadBehind,
   fetchOrigin,
+  getConflictState,
+  getSyncDivergence,
   git,
   gitRaw,
   hasAnyChanges,
@@ -34,9 +36,13 @@ import {
   encryptPayload,
   getCachedVaultPassword,
   getVaultStatus,
+  hasSensitiveChanges,
   hasVaultFile,
+  hashSensitiveFiles,
   packSensitiveFiles,
   readVaultFile,
+  saveSensitiveHash,
+  SYNCABLE_SENSITIVE_FILES,
   unpackSensitiveFiles,
   writeVaultFile,
 } from "./vault.js";
@@ -92,21 +98,26 @@ export async function prepareCommit(deps?: Deps, ctx?: Ctx) {
   await ensureFilter(dir, config);
   await refreshMachineSidecar(dir, config);
 
-  // If vault is enabled and unlocked on this machine, update vault.enc with latest local credentials
+  // If vault is enabled and unlocked on this machine, update vault.enc ONLY IF sensitive files changed
   const vaultStatus = await getVaultStatus(dir);
   if (vaultStatus === "unlocked") {
     const password = await getCachedVaultPassword(dir);
-    if (password) {
+    if (password && (await hasSensitiveChanges(dir))) {
       const payload = await packSensitiveFiles(dir);
       if (Object.keys(payload.files).length > 0) {
         const encrypted = encryptPayload(payload, password);
         await writeVaultFile(dir, encrypted);
+        const hash = await hashSensitiveFiles(dir);
+        if (hash) {
+          await saveSensitiveHash(dir, hash);
+        }
       }
     }
   }
 
   return config;
 }
+
 
 export async function commitLocalChanges(deps?: Deps, commitMessage?: string, ctx?: Ctx): Promise<boolean> {
   const dir = dirOf(deps);
@@ -162,7 +173,12 @@ export async function runInit(
     const encrypted = encryptPayload(payload, password);
     await writeVaultFile(dir, encrypted);
     await cacheVaultPassword(dir, password);
+    const hash = await hashSensitiveFiles(dir);
+    if (hash) {
+      await saveSensitiveHash(dir, hash);
+    }
   }
+
 
   const config = await readConfig(deps, ctx);
   await ensureIgnoreRules(dir, config);
@@ -399,20 +415,87 @@ export async function showStatus(ctx: Ctx, deps?: Deps): Promise<void> {
     return;
   }
 
-  const branch = (await git(["rev-parse", "--abbrev-ref", "HEAD"], dir)).stdout.trim();
+  const { branch, upstream, ahead, behind } = await getSyncDivergence(dir);
   const dirty = (await git(["status", "--porcelain"], dir)).stdout.trim();
   const bad = await trackedSecretFiles(dir);
   const vaultStatus = await getVaultStatus(dir);
+  const conflicts = await getConflictState(dir);
+  const sensitiveChanged = vaultStatus === "unlocked" ? await hasSensitiveChanges(dir) : false;
 
-  notify(
-    ctx,
-    `repo: ${dir}\nbranch: ${branch}\nvault: ${vaultStatus}\nuncommitted changes: ${dirty ? "yes" : "none"}${
-      bad.length ? `\nWARNING tracked sensitive files: ${bad.join(", ")}` : ""
-    }`,
-    bad.length ? "warning" : "info",
-    deps
-  );
+  let upstreamDesc = "no upstream configured";
+  if (upstream) {
+    if (ahead === 0 && behind === 0) {
+      upstreamDesc = `up to date with ${upstream}`;
+    } else if (ahead > 0 && behind === 0) {
+      upstreamDesc = `ahead of ${upstream} by ${ahead} commit${ahead > 1 ? "s" : ""} (run /ompsync push)`;
+    } else if (behind > 0 && ahead === 0) {
+      upstreamDesc = `behind ${upstream} by ${behind} commit${behind > 1 ? "s" : ""} (run /ompsync pull)`;
+    } else {
+      upstreamDesc = `diverged: ahead ${ahead}, behind ${behind} (run /ompsync sync)`;
+    }
+  }
+
+  let vaultDesc: string = vaultStatus;
+  if (vaultStatus === "unlocked") {
+    const present: string[] = [];
+    for (const file of SYNCABLE_SENSITIVE_FILES) {
+      try {
+        await fs.access(path.join(dir, file));
+        present.push(file);
+      } catch {}
+    }
+    const fileList = present.length ? ` [${present.join(", ")}]` : "";
+    vaultDesc = sensitiveChanged
+      ? `unlocked${fileList} (local credentials modified pending sync)`
+      : `unlocked${fileList} (synced)`;
+  } else if (vaultStatus === "locked") {
+    vaultDesc = `locked (credentials encrypted in vault.enc — run '/ompsync unlock' to decrypt)`;
+  } else {
+    vaultDesc = `disabled (unencrypted config only — run '/ompsync vault enable' to secure tokens)`;
+  }
+
+  const lines = [
+    `📁 Repository: ${dir}`,
+    `🌿 Branch: ${branch}`,
+    `🌐 Remote Sync: ${upstreamDesc}`,
+    `🔐 Vault Status: ${vaultDesc}`,
+    `📝 Local Changes: ${dirty || sensitiveChanged ? "uncommitted changes pending" : "working tree clean"}`,
+  ];
+
+  if (conflicts.hasConflicts) {
+    lines.push("");
+    lines.push(`⚠️ GIT CONFLICT / REBASE DETECTED:`);
+    if (conflicts.conflictedFiles.length) {
+      lines.push(`   Conflicted files: ${conflicts.conflictedFiles.join(", ")}`);
+    }
+    lines.push(`👉 How to resolve:`);
+    if (conflicts.conflictedFiles.includes("vault.enc")) {
+      lines.push(`   • To accept remote credentials vault (recommended):`);
+      lines.push(`     git checkout --theirs vault.enc && git add vault.enc`);
+      lines.push(`   • To keep your local machine credentials:`);
+      lines.push(`     git checkout --ours vault.enc && git add vault.enc`);
+    } else {
+      lines.push(`   • To accept remote changes: git checkout --theirs <file> && git add <file>`);
+      lines.push(`   • To keep local changes:   git checkout --ours <file> && git add <file>`);
+    }
+    if (conflicts.inRebase) {
+      lines.push(`   • Complete rebase after resolving: git rebase --continue`);
+      lines.push(`   • Or abort rebase:                 git rebase --abort`);
+    } else if (conflicts.inMerge) {
+      lines.push(`   • Complete merge after resolving:  git commit`);
+      lines.push(`   • Or abort merge:                  git merge --abort`);
+    }
+  }
+
+  if (bad.length) {
+    lines.push("");
+    lines.push(`🚨 SECURITY WARNING: Tracked sensitive files: ${bad.join(", ")}`);
+    lines.push(`   Remove from git index: git rm --cached <file>`);
+  }
+
+  notify(ctx, lines.join("\n"), conflicts.hasConflicts || bad.length ? "warning" : "info", deps);
 }
+
 
 export async function runSync(
   ctx: Ctx,
@@ -566,6 +649,11 @@ export async function runEnableVault(passwordArg?: string, ctx?: Ctx, deps?: Dep
   const encrypted = encryptPayload(payload, password);
   await writeVaultFile(dir, encrypted);
   await cacheVaultPassword(dir, password);
+  const hash = await hashSensitiveFiles(dir);
+  if (hash) {
+    await saveSensitiveHash(dir, hash);
+  }
+
 
   if (await isSyncableRepo(dir)) {
     await commitLocalChanges(deps, "omp config: enable encrypted credentials vault", ctx);

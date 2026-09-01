@@ -162,7 +162,49 @@ export async function clearCachedVaultPassword(dir: string): Promise<void> {
   } catch {}
 }
 
-const SYNCABLE_SENSITIVE_FILES = ["auth.json", "auth-broker.json"];
+export const SYNCABLE_SENSITIVE_FILES = ["auth.json", "auth-broker.json"];
+
+export async function hashSensitiveFiles(dir: string): Promise<string> {
+  const hash = crypto.createHash("sha256");
+  let foundAny = false;
+
+  for (const rel of [...SYNCABLE_SENSITIVE_FILES].sort()) {
+    try {
+      const content = await fs.readFile(path.join(dir, rel));
+      hash.update(`${rel}:`);
+      hash.update(content);
+      foundAny = true;
+    } catch {}
+  }
+
+  return foundAny ? hash.digest("hex") : "";
+}
+
+export async function getSavedSensitiveHash(dir: string): Promise<string | undefined> {
+  try {
+    const content = await fs.readFile(path.join(dir, ".git-sync", "sensitive.hash"), "utf8");
+    return content.trim() || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export async function saveSensitiveHash(dir: string, hash: string): Promise<void> {
+  const stateDir = path.join(dir, ".git-sync");
+  await fs.mkdir(stateDir, { recursive: true });
+  await fs.writeFile(path.join(stateDir, "sensitive.hash"), hash, "utf8");
+}
+
+export async function hasSensitiveChanges(dir: string): Promise<boolean> {
+  const currentHash = await hashSensitiveFiles(dir);
+  const savedHash = await getSavedSensitiveHash(dir);
+
+  // If no sensitive files exist currently and none were saved, no changes
+  if (!currentHash && !savedHash) return false;
+
+  // If saved hash matches current hash, no changes
+  return currentHash !== savedHash;
+}
 
 export async function packSensitiveFiles(dir: string): Promise<VaultPayload> {
   const files: Record<string, string> = {};
@@ -188,6 +230,10 @@ export async function unpackSensitiveFiles(dir: string, payload: VaultPayload): 
     await fs.writeFile(target, content, { encoding: "utf8", mode: 0o600 });
     unpacked.push(filename);
   }
+  const currentHash = await hashSensitiveFiles(dir);
+  if (currentHash) {
+    await saveSensitiveHash(dir, currentHash);
+  }
   return unpacked;
 }
 
@@ -208,3 +254,4 @@ export async function getVaultStatus(dir: string): Promise<"disabled" | "locked"
     return "locked";
   }
 }
+

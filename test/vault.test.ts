@@ -108,3 +108,31 @@ test("cacheVaultPassword and clearCachedVaultPassword control vault status", asy
   assert.equal(await getCachedVaultPassword(dir), undefined);
   assert.equal(await getVaultStatus(dir), "locked");
 });
+
+test("hashSensitiveFiles and hasSensitiveChanges detect actual credential modifications", async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-vault-hash-test-"));
+  const { hashSensitiveFiles, hasSensitiveChanges, saveSensitiveHash, getSavedSensitiveHash } = await import(
+    "../src/vault.js"
+  );
+
+  // Initially empty -> no changes
+  assert.equal(await hasSensitiveChanges(dir), false);
+
+  // Write auth.json
+  await fs.writeFile(path.join(dir, "auth.json"), JSON.stringify({ token: "token-1" }));
+  assert.equal(await hasSensitiveChanges(dir), true);
+
+  const hash1 = await hashSensitiveFiles(dir);
+  assert.ok(hash1.length > 0);
+  await saveSensitiveHash(dir, hash1);
+  assert.equal(await getSavedSensitiveHash(dir), hash1);
+  assert.equal(await hasSensitiveChanges(dir), false);
+
+  // Modify auth.json -> changes detected
+  await fs.writeFile(path.join(dir, "auth.json"), JSON.stringify({ token: "token-2" }));
+  assert.equal(await hasSensitiveChanges(dir), true);
+
+  const hash2 = await hashSensitiveFiles(dir);
+  assert.notEqual(hash1, hash2);
+});
+
