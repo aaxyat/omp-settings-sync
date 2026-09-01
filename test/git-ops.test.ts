@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { parseRepoReference } from "../src/gh.js";
-import { git, hasDotGit, isSyncableRepo } from "../src/git.js";
+import { git, hasAnyChanges, hasDotGit, hasLocalChanges, isSyncableRepo } from "../src/git.js";
 
 test("parseRepoReference parses various GitHub repository URL and name shapes", () => {
   assert.deepEqual(parseRepoReference("my-config", "user1"), { owner: "user1", name: "my-config" });
@@ -13,10 +13,18 @@ test("parseRepoReference parses various GitHub repository URL and name shapes", 
   assert.deepEqual(parseRepoReference("https://github.com/org/repo", "user1"), { owner: "org", name: "repo" });
 });
 
-test("git operations execute in isolated ceiling directory", async () => {
+test("git operations execute in isolated ceiling directory and detect changes", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-git-test-"));
   assert.equal(await hasDotGit(root), false);
   await git(["init", "-b", "main"], root);
   assert.equal(await hasDotGit(root), true);
   assert.equal(await isSyncableRepo(root), false);
+
+  // No changes yet
+  assert.equal(await hasLocalChanges(root), false);
+
+  // Add a change
+  await fs.writeFile(path.join(root, "test.txt"), "hello");
+  assert.equal(await hasLocalChanges(root), true);
+  assert.equal(await hasAnyChanges(root), true);
 });

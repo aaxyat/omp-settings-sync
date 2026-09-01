@@ -4,6 +4,8 @@ import type { Ctx, Deps } from "./config.js";
 import { dirOf, readConfig } from "./config.js";
 import { isSyncableRepo } from "./git.js";
 
+export const DEFAULT_AUTO_SYNC_INTERVAL_MINUTES = 1;
+
 export function stateDir(dir: string): string {
   return path.join(dir, ".git-sync");
 }
@@ -49,7 +51,7 @@ export async function shouldAutoSync(deps?: Deps): Promise<boolean> {
   if (!state.lastAutoSyncAt) return true;
 
   const config = await readConfig(deps);
-  const intervalMs = (config.autoSyncIntervalMinutes ?? 5) * 60_000;
+  const intervalMs = (config.autoSyncIntervalMinutes ?? DEFAULT_AUTO_SYNC_INTERVAL_MINUTES) * 60_000;
   return Date.now() - Date.parse(state.lastAutoSyncAt) >= intervalMs;
 }
 

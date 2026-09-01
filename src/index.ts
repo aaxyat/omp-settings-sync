@@ -3,6 +3,7 @@ import { dirOf } from "./config.js";
 import { countAheadBehind, isSyncableRepo, pushOrigin, upstreamRef } from "./git.js";
 import { isSubagentChild, shouldAutoSync, withLock, writeSyncState } from "./lock.js";
 import {
+  checkAndBackgroundSync,
   commitLocalChanges,
   prepareCommit,
   runDisableVault,
@@ -14,6 +15,8 @@ import {
   runUnlockVault,
   showStatus,
 } from "./sync.js";
+
+const BACKGROUND_SYNC_INTERVAL_MS = 60_000; // 1 minute
 
 export default function gitSyncExtension(pi: ExtensionAPI) {
   pi.setLabel("OMP Config Git Sync");
@@ -90,6 +93,7 @@ export default function gitSyncExtension(pi: ExtensionAPI) {
   pi.registerCommand("ompsync", commandDef);
 
   pi.on("session_start", async (_event, ctx: ExtensionContext) => {
+    // 1. Immediate sync on startup if due
     if (await shouldAutoSync()) {
       try {
         await withLock(ctx, async () => {
@@ -101,6 +105,22 @@ export default function gitSyncExtension(pi: ExtensionAPI) {
         if (ctx.hasUI) ctx.ui.notify(`omp-sync skipped: ${msg}`, "warning");
       }
     }
+
+    // 2. Schedule 1-minute background sync interval to sync whenever changes occur
+    const scheduleInterval =
+      typeof ctx.setInterval === "function"
+        ? (fn: () => void, ms: number) => ctx.setInterval(fn, ms)
+        : (fn: () => void, ms: number) => {
+            const timer = setInterval(fn, ms);
+            timer.unref?.();
+            return timer;
+          };
+
+    scheduleInterval(async () => {
+      try {
+        await checkAndBackgroundSync(ctx);
+      } catch {}
+    }, BACKGROUND_SYNC_INTERVAL_MS);
   });
 
   pi.on("session_shutdown", async (event, ctx: ExtensionContext) => {

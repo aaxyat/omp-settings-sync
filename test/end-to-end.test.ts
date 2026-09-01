@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
-import { runInit, runLink, runSync, runUnlockVault, showStatus } from "../src/sync.js";
+import { checkAndBackgroundSync, runInit, runLink, runSync, runUnlockVault, showStatus } from "../src/sync.js";
 import { getVaultStatus } from "../src/vault.js";
 import { createBareRemote, createFakeGh, createMachineFixture } from "./helpers.js";
 
@@ -31,6 +31,29 @@ test("end-to-end round trip: init machine A, link machine B, sync bidirectional 
   // 4. Sync Machine A and verify change received
   await runSync(undefined, { auto: false, push: true }, { dir: a.dir });
   assert.equal(await fs.readFile(path.join(a.dir, "AGENTS.md"), "utf8"), "# Updated on B\n");
+});
+
+test("checkAndBackgroundSync detects local changes and syncs them automatically", async () => {
+  const a = await createMachineFixture("bg-sync-a");
+  const remote = await createBareRemote(a.root);
+  const ghA = createFakeGh();
+
+  await runInit(remote, undefined, { dir: a.dir, gh: ghA });
+
+  // No changes -> returns false
+  const syncedWithoutChanges = await checkAndBackgroundSync(undefined, { dir: a.dir });
+  assert.equal(syncedWithoutChanges, false);
+
+  // Add change -> returns true and commits/pushes
+  await fs.writeFile(path.join(a.dir, "AGENTS.md"), "# Background synced changes\n");
+  const syncedWithChanges = await checkAndBackgroundSync(undefined, { dir: a.dir });
+  assert.equal(syncedWithChanges, true);
+
+  // Link on Machine B and verify change was synced
+  const b = await createMachineFixture("bg-sync-b");
+  const ghB = createFakeGh();
+  await runLink(remote, undefined, { dir: b.dir, gh: ghB });
+  assert.equal(await fs.readFile(path.join(b.dir, "AGENTS.md"), "utf8"), "# Background synced changes\n");
 });
 
 test("encrypted vault lifecycle: init with password, link with password restores auth.json, link without password gracefully falls back and unlocks later", async () => {

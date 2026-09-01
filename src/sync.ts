@@ -10,6 +10,7 @@ import {
   fetchOrigin,
   git,
   gitRaw,
+  hasAnyChanges,
   hasCommits,
   hasDotGit,
   integrateUpstream,
@@ -17,6 +18,7 @@ import {
   pushOrigin,
   upstreamRef,
 } from "./git.js";
+import { isSubagentChild, withLock, writeSyncState } from "./lock.js";
 import {
   ensureIgnoreRules,
   ensureInfoExclude,
@@ -454,6 +456,26 @@ export async function runSync(
   } finally {
     if (ctx?.hasUI && ctx.ui) ctx.ui.setStatus(STATUS_KEY, undefined);
   }
+}
+
+export async function checkAndBackgroundSync(ctx: Ctx, deps?: Deps): Promise<boolean> {
+  const dir = dirOf(deps);
+  if (isSubagentChild() || !(await isSyncableRepo(dir))) return false;
+
+  const hasChanges = await hasAnyChanges(dir);
+  if (!hasChanges) return false;
+
+  const ran = await withLock(
+    ctx,
+    async () => {
+      await writeSyncState({ lastAutoSyncAt: new Date().toISOString() }, dir);
+      await runSync(ctx, { auto: true, push: true }, deps);
+      return true;
+    },
+    deps
+  );
+
+  return ran === true;
 }
 
 export async function runUnlockVault(passwordArg?: string, ctx?: Ctx, deps?: Deps): Promise<void> {

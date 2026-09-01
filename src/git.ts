@@ -109,3 +109,29 @@ export async function pushOrigin(first: boolean, dir: string): Promise<boolean> 
     return false;
   }
 }
+
+export async function hasLocalChanges(dir = dirOf()): Promise<boolean> {
+  try {
+    const { stdout } = await git(["status", "--porcelain"], dir);
+    return stdout.trim().length > 0;
+  } catch {
+    return false;
+  }
+}
+
+export async function hasRemoteChanges(dir = dirOf()): Promise<boolean> {
+  try {
+    if (!(await fetchOrigin(dir))) return false;
+    const upstream = await upstreamRef(dir);
+    if (!upstream) return false;
+    const { ahead, behind } = await countAheadBehind(upstream, dir);
+    return ahead > 0 || behind > 0;
+  } catch {
+    return false;
+  }
+}
+
+export async function hasAnyChanges(dir = dirOf()): Promise<boolean> {
+  if (await hasLocalChanges(dir)) return true;
+  return await hasRemoteChanges(dir);
+}
