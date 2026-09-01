@@ -1,0 +1,58 @@
+{
+  "name": "omp-settings-sync",
+  "version": "0.1.0",
+  "description": "Securely sync your ~/.omp/agent configuration across machines through a private git repo with hard secret guards.",
+  "type": "module",
+  "license": "MIT",
+  "author": "aaxyat",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/aaxyat/omp-settings-sync.git"
+  },
+  "bugs": {
+    "url": "https://github.com/aaxyat/omp-settings-sync/issues"
+  },
+  "homepage": "https://github.com/aaxyat/omp-settings-sync#readme",
+  "keywords": [
+    "omp-package",
+    "omp-plugin",
+    "pi-package"
+  ],
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "omp": {
+    "extensions": [
+      "./dist/index.js"
+    ]
+  },
+  "pi": {
+    "extensions": [
+      "./dist/index.js"
+    ]
+  },
+  "peerDependencies": {
+    "@oh-my-pi/pi-coding-agent": "*"
+  },
+  "devDependencies": {
+    "@oh-my-pi/pi-coding-agent": "^18.0.11",
+    "@types/node": "^22",
+    "typescript": "^5.7"
+  },
+  "scripts": {
+    "build": "tsc",
+    "build:test": "tsc -p tsconfig.test.json",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.test.json --noEmit",
+    "test": "npm run build && npm run build:test && node --test dist-test/test/*.test.js",
+    "check": "npm run typecheck && npm test",
+    "prepare": "npm run build"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
