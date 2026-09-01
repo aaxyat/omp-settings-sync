@@ -31,3 +31,34 @@ test("withLock handles process locking and cleanup", async () => {
   const lockFile = path.join(root, ".git-sync", "lock");
   await assert.rejects(async () => fs.stat(lockFile));
 });
+
+test("withLock serializes concurrent in-process calls without self-deadlock", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-lock-concurrent-"));
+  const deps = { dir: root };
+  const order: number[] = [];
+
+  const task1 = withLock(
+    undefined,
+    async () => {
+      await new Promise((r) => setTimeout(r, 50));
+      order.push(1);
+      return "res1";
+    },
+    deps
+  );
+
+  const task2 = withLock(
+    undefined,
+    async () => {
+      order.push(2);
+      return "res2";
+    },
+    deps
+  );
+
+  const [res1, res2] = await Promise.all([task1, task2]);
+  assert.equal(res1, "res1");
+  assert.equal(res2, "res2");
+  assert.deepEqual(order, [1, 2]);
+});
+

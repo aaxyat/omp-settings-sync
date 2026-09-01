@@ -98,6 +98,23 @@ export function decryptPayload(encryptedJson: string, password: string): VaultPa
   return payload as VaultPayload;
 }
 
+export async function atomicWriteFile(
+  targetPath: string,
+  content: string | Buffer,
+  mode?: number
+): Promise<void> {
+  const dir = path.dirname(targetPath);
+  await fs.mkdir(dir, { recursive: true });
+  const tmpPath = `${targetPath}.${crypto.randomBytes(6).toString("hex")}.tmp`;
+  await fs.writeFile(tmpPath, content, { encoding: typeof content === "string" ? "utf8" : undefined, mode });
+  try {
+    await fs.rename(tmpPath, targetPath);
+  } catch {
+    await fs.rm(targetPath, { force: true });
+    await fs.rename(tmpPath, targetPath);
+  }
+}
+
 export function vaultPath(dir: string): string {
   return path.join(dir, VAULT_FILENAME);
 }
@@ -122,7 +139,7 @@ export async function readVaultFile(dir: string): Promise<string | undefined> {
 }
 
 export async function writeVaultFile(dir: string, content: string): Promise<void> {
-  await fs.writeFile(vaultPath(dir), content, "utf8");
+  await atomicWriteFile(vaultPath(dir), content);
 }
 
 export async function deleteVaultFile(dir: string): Promise<void> {
@@ -136,9 +153,8 @@ export async function deleteVaultFile(dir: string): Promise<void> {
 export async function cacheVaultPassword(dir: string, password: string): Promise<void> {
   inMemoryPasswordCache.set(dir, password);
   const stateDir = path.join(dir, ".git-sync");
-  await fs.mkdir(stateDir, { recursive: true });
   // Store password locally in non-tracked .git-sync/vault.key
-  await fs.writeFile(path.join(stateDir, "vault.key"), password, { encoding: "utf8", mode: 0o600 });
+  await atomicWriteFile(path.join(stateDir, "vault.key"), password, 0o600);
 }
 
 export async function getCachedVaultPassword(dir: string): Promise<string | undefined> {
@@ -191,8 +207,7 @@ export async function getSavedSensitiveHash(dir: string): Promise<string | undef
 
 export async function saveSensitiveHash(dir: string, hash: string): Promise<void> {
   const stateDir = path.join(dir, ".git-sync");
-  await fs.mkdir(stateDir, { recursive: true });
-  await fs.writeFile(path.join(stateDir, "sensitive.hash"), hash, "utf8");
+  await atomicWriteFile(path.join(stateDir, "sensitive.hash"), hash);
 }
 
 export async function hasSensitiveChanges(dir: string): Promise<boolean> {
@@ -231,7 +246,6 @@ export async function hasSensitiveChanges(dir: string): Promise<boolean> {
   return currentHash !== savedHash;
 }
 
-
 export async function packSensitiveFiles(dir: string): Promise<VaultPayload> {
   const files: Record<string, string> = {};
 
@@ -252,8 +266,7 @@ export async function unpackSensitiveFiles(dir: string, payload: VaultPayload): 
   const unpacked: string[] = [];
   for (const [filename, content] of Object.entries(payload.files)) {
     const target = path.join(dir, filename);
-    await fs.mkdir(path.dirname(target), { recursive: true });
-    await fs.writeFile(target, content, { encoding: "utf8", mode: 0o600 });
+    await atomicWriteFile(target, content, 0o600);
     unpacked.push(filename);
   }
   const currentHash = await hashSensitiveFiles(dir);
@@ -262,6 +275,7 @@ export async function unpackSensitiveFiles(dir: string, payload: VaultPayload): 
   }
   return unpacked;
 }
+
 
 export async function getVaultStatus(dir: string): Promise<"disabled" | "locked" | "unlocked"> {
   const exists = await hasVaultFile(dir);

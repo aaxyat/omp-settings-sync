@@ -19,7 +19,20 @@ export function gitEnv(dir: string): NodeJS.ProcessEnv {
   };
 }
 
-export function git(args: string[], dir: string, timeout = 15_000) {
+export async function cleanStaleIndexLock(dir: string, maxAgeMs = 15_000): Promise<void> {
+  const lockFile = path.join(dir, ".git", "index.lock");
+  try {
+    const stats = await fs.stat(lockFile);
+    if (Date.now() - stats.mtimeMs >= maxAgeMs) {
+      await fs.rm(lockFile, { force: true });
+    }
+  } catch {}
+}
+
+export async function git(args: string[], dir: string, timeout = 15_000) {
+  if (args.some((a) => ["add", "commit", "rebase", "merge", "reset", "checkout", "pull", "push"].includes(a))) {
+    await cleanStaleIndexLock(dir);
+  }
   return exec("git", args, {
     cwd: dir,
     timeout,
@@ -28,7 +41,7 @@ export function git(args: string[], dir: string, timeout = 15_000) {
   });
 }
 
-export function gitRaw(args: string[], dir: string): Promise<{ stdout: Buffer; stderr: Buffer }> {
+export async function gitRaw(args: string[], dir: string): Promise<{ stdout: Buffer; stderr: Buffer }> {
   return exec("git", args, {
     cwd: dir,
     timeout: 15_000,
@@ -37,6 +50,7 @@ export function gitRaw(args: string[], dir: string): Promise<{ stdout: Buffer; s
     env: gitEnv(dir),
   }) as unknown as Promise<{ stdout: Buffer; stderr: Buffer }>;
 }
+
 
 export async function hasDotGit(dir: string): Promise<boolean> {
   try {
@@ -115,14 +129,15 @@ export async function integrateUpstream(upstream: string, dir: string): Promise<
   }
 }
 
-export async function pushOrigin(first: boolean, dir: string): Promise<boolean> {
+export async function pushOrigin(first = false, dir: string): Promise<boolean> {
   try {
-    await git(first ? ["push", "-u", "origin", "HEAD"] : ["push"], dir, 20_000);
+    await git(["push", "-u", "origin", "HEAD"], dir, 20_000);
     return true;
   } catch {
     return false;
   }
 }
+
 
 import { getVaultStatus, hasSensitiveChanges } from "./vault.js";
 
@@ -152,10 +167,12 @@ export async function hasRemoteChanges(dir = dirOf()): Promise<boolean> {
   }
 }
 
-export async function hasAnyChanges(dir = dirOf()): Promise<boolean> {
+export async function hasAnyChanges(dir = dirOf(), checkRemote = true): Promise<boolean> {
   if (await hasLocalChanges(dir)) return true;
+  if (!checkRemote) return false;
   return await hasRemoteChanges(dir);
 }
+
 
 export interface ConflictState {
   hasConflicts: boolean;

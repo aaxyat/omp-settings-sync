@@ -15,13 +15,16 @@ import {
   hasAnyChanges,
   hasCommits,
   hasDotGit,
+  hasLocalChanges,
+  hasRemoteChanges,
   integrateUpstream,
   isRemoteReachable,
   isSyncableRepo,
   pushOrigin,
   upstreamRef,
 } from "./git.js";
-import { isSubagentChild, withLock, writeSyncState } from "./lock.js";
+import { isSubagentChild, shouldCheckRemote, withLock, writeSyncState } from "./lock.js";
+
 import {
   ensureIgnoreRules,
   ensureInfoExclude,
@@ -365,6 +368,9 @@ export async function runLink(
     }
   }
 
+  await git(["branch", "-u", `origin/${branch}`, branch], dir).catch(() => {});
+
+
   // Handle encrypted vault if present
   let vaultDecrypted = false;
   const hasVault = await hasVaultFile(dir);
@@ -617,9 +623,9 @@ export async function runSync(
         return;
       }
 
-      const upstream = await upstreamRef(dir);
+      const upstream = (await upstreamRef(dir)) ?? `origin/${await defaultBranch(dir)}`;
       if (upstream) {
-        const { behind } = await countAheadBehind(upstream, dir);
+        const { behind } = await countAheadBehind(upstream, dir).catch(() => ({ behind: 0, ahead: 0 }));
         if (behind > 0) {
           updateSyncProgress(ctx, 70, "Integrating remote changes...");
           if (!(await integrateUpstream(upstream, dir))) {
@@ -649,16 +655,26 @@ export async function runSync(
 
     if (options.push) {
       updateSyncProgress(ctx, 90, "Pushing changes to remote...");
-      const upstream = await upstreamRef(dir);
-      if (!upstream) {
-        if (await pushOrigin(true, dir)) changed.push("pushed");
-      } else {
-        const { ahead } = await countAheadBehind(upstream, dir);
-        if (ahead > 0) {
-          if (await pushOrigin(false, dir)) changed.push("pushed");
+      const upstream = (await upstreamRef(dir)) ?? `origin/${await defaultBranch(dir)}`;
+      let pushed = false;
+      const { ahead } = await countAheadBehind(upstream, dir).catch(() => ({ ahead: 1, behind: 0 }));
+      if (ahead > 0) {
+        pushed = await pushOrigin(false, dir);
+        // Push rejected (race condition where remote was updated concurrently)
+        if (!pushed) {
+          updateSyncProgress(ctx, 92, "Remote advanced, reconciling changes...");
+          if (await fetchOrigin(dir)) {
+            if (await integrateUpstream(upstream, dir)) {
+              pushed = await pushOrigin(false, dir);
+            }
+          }
         }
+      } else if (!upstreamRef(dir)) {
+        pushed = await pushOrigin(true, dir);
       }
+      if (pushed) changed.push("pushed");
     }
+
 
     updateSyncProgress(ctx, 100, "Complete");
 
@@ -672,18 +688,27 @@ export async function runSync(
   }
 }
 
-
 export async function checkAndBackgroundSync(ctx: Ctx, deps?: Deps): Promise<boolean> {
   const dir = dirOf(deps);
   if (isSubagentChild() || !(await isSyncableRepo(dir))) return false;
 
-  const hasChanges = await hasAnyChanges(dir);
+  const localChanges = await hasLocalChanges(dir);
+  const config = await readConfig(deps, ctx);
+  const checkRemote = localChanges || (await shouldCheckRemote(deps, config.autoSyncIntervalMinutes ?? 5));
+
+  if (!localChanges && !checkRemote) return false;
+
+  const hasChanges = localChanges || (await hasRemoteChanges(dir));
+  if (checkRemote) {
+    await writeSyncState({ lastRemoteCheckAt: new Date().toISOString() }, dir).catch(() => {});
+  }
+
   if (!hasChanges) return false;
 
   const ran = await withLock(
     ctx,
     async () => {
-      await writeSyncState({ lastAutoSyncAt: new Date().toISOString() }, dir);
+      await writeSyncState({ lastAutoSyncAt: new Date().toISOString(), lastRemoteCheckAt: new Date().toISOString() }, dir);
       await runSync(ctx, { auto: true, push: true }, deps);
       return true;
     },
@@ -692,6 +717,7 @@ export async function checkAndBackgroundSync(ctx: Ctx, deps?: Deps): Promise<boo
 
   return ran === true;
 }
+
 
 export async function runUnlockVault(passwordArg?: string, ctx?: Ctx, deps?: Deps): Promise<void> {
   const dir = dirOf(deps);

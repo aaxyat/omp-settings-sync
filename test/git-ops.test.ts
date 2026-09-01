@@ -27,4 +27,16 @@ test("git operations execute in isolated ceiling directory and detect changes", 
   await fs.writeFile(path.join(root, "test.txt"), "hello");
   assert.equal(await hasLocalChanges(root), true);
   assert.equal(await hasAnyChanges(root), true);
+
+  // Simulate stale index.lock
+  const lockFile = path.join(root, ".git", "index.lock");
+  await fs.writeFile(lockFile, "dummy-lock");
+  // Set mtime to past
+  const past = new Date(Date.now() - 30_000);
+  await fs.utimes(lockFile, past, past);
+
+  // git command automatically removes stale index.lock and succeeds
+  await git(["add", "-A"], root);
+  assert.equal(await hasDotGit(root), true);
 });
+

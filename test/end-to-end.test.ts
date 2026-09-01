@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
+import { git } from "../src/git.js";
 import { checkAndBackgroundSync, runInit, runLink, runSync, runUnlockVault, showStatus } from "../src/sync.js";
+
 import { getVaultStatus } from "../src/vault.js";
 import { createBareRemote, createFakeGh, createMachineFixture } from "./helpers.js";
 
@@ -251,6 +253,39 @@ test("runReset and runSync with discardLocal forcefully discard local changes an
     "# Agent Instructions\n"
   );
 });
+
+test("runSync automatically reconciles and retries push on race condition", async () => {
+  const a = await createMachineFixture("race-a");
+  const remote = await createBareRemote(a.root);
+  const ghA = createFakeGh();
+  await runInit(remote, undefined, { dir: a.dir, gh: ghA });
+
+  const b = await createMachineFixture("race-b");
+  const ghB = createFakeGh();
+  await runLink(remote, undefined, { dir: b.dir, gh: ghB });
+
+  // Both make non-conflicting changes to tracked directories
+  await fs.mkdir(path.join(a.dir, "skills"), { recursive: true });
+  await fs.mkdir(path.join(b.dir, "skills"), { recursive: true });
+  await fs.writeFile(path.join(a.dir, "skills", "skillA.md"), "# Skill A\n");
+  await fs.writeFile(path.join(b.dir, "skills", "skillB.md"), "# Skill B\n");
+
+  // Machine A commits & pushes first
+  await runSync(undefined, { auto: false, push: true }, { dir: a.dir });
+
+  // Machine B now syncs (commits local, then auto-reconciles/rebases and pushes)
+  await runSync(undefined, { auto: false, push: true }, { dir: b.dir });
+
+  // Machine A pulls updates
+  await runSync(undefined, { auto: false, push: true }, { dir: a.dir });
+
+  // Both machines have both files cleanly
+  assert.ok(await fs.readFile(path.join(a.dir, "skills", "skillB.md"), "utf8"));
+  assert.ok(await fs.readFile(path.join(b.dir, "skills", "skillA.md"), "utf8"));
+});
+
+
+
 
 
 
