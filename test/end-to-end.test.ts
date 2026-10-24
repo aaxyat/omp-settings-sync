@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import { git } from "../src/git.js";
+import { readSyncState, writeSyncState } from "../src/lock.js";
 import { checkAndBackgroundSync, runInit, runLink, runSync, runUnlockVault, showStatus } from "../src/sync.js";
 
 import { getVaultStatus } from "../src/vault.js";
@@ -62,6 +63,31 @@ test("checkAndBackgroundSync detects local changes and syncs them automatically"
     (await fs.readFile(path.join(b.dir, "AGENTS.md"), "utf8")).replace(/\r\n/g, "\n"),
     "# Background synced changes\n"
   );
+});
+
+test("checkAndBackgroundSync does not push local changes more often than autoSyncIntervalMinutes", async () => {
+  const a = await createMachineFixture("bg-interval-a");
+  const remote = await createBareRemote(a.root);
+  await runInit(remote, undefined, { dir: a.dir, gh: createFakeGh() });
+  await fs.writeFile(path.join(a.dir, "omp-sync.jsonc"), '{ "autoSyncIntervalMinutes": 30 }');
+
+  // First dirty tick syncs and stamps lastAutoSyncAt
+  await fs.writeFile(path.join(a.dir, "AGENTS.md"), "# first\n");
+  assert.equal(await checkAndBackgroundSync(undefined, { dir: a.dir }), true);
+  assert.ok((await readSyncState(a.dir)).lastAutoSyncAt);
+  const { stdout: head1 } = await git(["rev-parse", "HEAD"], a.dir);
+
+  // A new local change right after is NOT synced: the interval has not elapsed
+  await fs.writeFile(path.join(a.dir, "AGENTS.md"), "# second\n");
+  assert.equal(await checkAndBackgroundSync(undefined, { dir: a.dir }), false);
+  const { stdout: head2 } = await git(["rev-parse", "HEAD"], a.dir);
+  assert.equal(head2, head1);
+
+  // Once the interval has elapsed the pending change is synced
+  await writeSyncState({ lastAutoSyncAt: new Date(Date.now() - 31 * 60_000).toISOString() }, a.dir);
+  assert.equal(await checkAndBackgroundSync(undefined, { dir: a.dir }), true);
+  const { stdout: head3 } = await git(["rev-parse", "HEAD"], a.dir);
+  assert.notEqual(head3, head1);
 });
 
 test("encrypted vault lifecycle: init with password, link with password restores auth.json, link without password gracefully falls back and unlocks later", async () => {
