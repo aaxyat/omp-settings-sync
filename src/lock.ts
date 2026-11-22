@@ -5,6 +5,13 @@ import { dirOf, readConfig } from "./config.js";
 import { isSyncableRepo } from "./git.js";
 
 export const DEFAULT_AUTO_SYNC_INTERVAL_MINUTES = 1;
+/** Lower bound for `autoSyncIntervalMinutes`; smaller or invalid values are clamped / ignored. */
+export const MIN_AUTO_SYNC_INTERVAL_MINUTES = 1;
+/**
+ * The background timer and `lastAutoSyncAt` are written a few milliseconds apart, so a strict comparison would
+ * skip every second tick. Allow this much slack when checking whether the interval has elapsed.
+ */
+const AUTO_SYNC_JITTER_MS = 5_000;
 export const DEFAULT_REMOTE_CHECK_INTERVAL_MINUTES = 5;
 
 const inProcessMutex = new Map<string, Promise<void>>();
@@ -66,6 +73,15 @@ export async function writeSyncState(state: Partial<SyncState>, dir = dirOf()): 
   await fs.writeFile(statePath(dir), JSON.stringify(next, null, 2) + "\n");
 }
 
+/**
+ * Resolve the background sync interval (in milliseconds) from `autoSyncIntervalMinutes`.
+ * Unset or invalid values fall back to the default (1 minute); values below the minimum are clamped.
+ */
+export function resolveAutoSyncIntervalMs(minutes?: unknown): number {
+  const value = typeof minutes === "number" && Number.isFinite(minutes) ? minutes : DEFAULT_AUTO_SYNC_INTERVAL_MINUTES;
+  return Math.max(value, MIN_AUTO_SYNC_INTERVAL_MINUTES) * 60_000;
+}
+
 export async function shouldAutoSync(deps?: Deps): Promise<boolean> {
   const dir = dirOf(deps);
   if (isSubagentChild() || !(await isSyncableRepo(dir))) return false;
@@ -74,8 +90,10 @@ export async function shouldAutoSync(deps?: Deps): Promise<boolean> {
   if (!state.lastAutoSyncAt) return true;
 
   const config = await readConfig(deps);
-  const intervalMs = (config.autoSyncIntervalMinutes ?? DEFAULT_AUTO_SYNC_INTERVAL_MINUTES) * 60_000;
-  return Date.now() - Date.parse(state.lastAutoSyncAt) >= intervalMs;
+  const intervalMs = resolveAutoSyncIntervalMs(config.autoSyncIntervalMinutes);
+  const last = Date.parse(state.lastAutoSyncAt);
+  if (Number.isNaN(last)) return true;
+  return Date.now() - last + Math.min(AUTO_SYNC_JITTER_MS, intervalMs / 10) >= intervalMs;
 }
 
 export async function shouldCheckRemote(deps?: Deps, minIntervalMinutes = DEFAULT_REMOTE_CHECK_INTERVAL_MINUTES): Promise<boolean> {

@@ -1,3 +1,4 @@
+import { accessSync, constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { OmpSyncConfig } from "./config.js";
@@ -140,8 +141,41 @@ async function gitConfigValue(key: string, dir: string): Promise<string | undefi
   }
 }
 
-function formatFilterCommand(scriptPath: string, mode: string, format: string): string {
-  const nodeExec = process.execPath.replaceAll("\\", "/");
+/**
+ * Pick the JavaScript runtime that git should use to run the clean/smudge filter script.
+ *
+ * `process.execPath` is only a JS runtime when the extension is loaded by plain node or bun. When it is
+ * loaded inside a compiled omp, `process.execPath` is the omp binary itself, and git would start a full
+ * omp agent for every filtered file. In that case, look up `node`, then `bun`, on PATH instead.
+ */
+export function resolveJsRuntime(
+  execPath: string = process.execPath,
+  pathEnv: string = process.env.PATH ?? "",
+  platform: NodeJS.Platform = process.platform
+): string {
+  // `path.win32` understands both separators; fall back to the host `path` elsewhere.
+  const pathLib = platform === "win32" ? path.win32 : path;
+  const base = pathLib.basename(execPath).toLowerCase().replace(/\.exe$/, "");
+  if (base === "node" || base === "bun") return execPath;
+
+  const exts = platform === "win32" ? [".exe", ".cmd", ""] : [""];
+  for (const name of ["node", "bun"]) {
+    for (const dir of pathEnv.split(pathLib.delimiter)) {
+      if (!dir) continue;
+      for (const ext of exts) {
+        const candidate = pathLib.join(dir, name + ext);
+        try {
+          accessSync(candidate, fsConstants.X_OK);
+          return candidate;
+        } catch {}
+      }
+    }
+  }
+  return "node";
+}
+
+export function formatFilterCommand(scriptPath: string, mode: string, format: string, runtime = resolveJsRuntime()): string {
+  const nodeExec = runtime.replaceAll("\\", "/");
   const script = scriptPath.replaceAll("\\", "/");
   return `"${nodeExec}" "${script}" ${mode} ${format}`;
 }

@@ -23,7 +23,7 @@ import {
   pushOrigin,
   upstreamRef,
 } from "./git.js";
-import { isSubagentChild, shouldCheckRemote, withLock, writeSyncState } from "./lock.js";
+import { isSubagentChild, shouldAutoSync, shouldCheckRemote, withLock, writeSyncState } from "./lock.js";
 
 import {
   ensureIgnoreRules,
@@ -691,6 +691,10 @@ export async function runSync(
 export async function checkAndBackgroundSync(ctx: Ctx, deps?: Deps): Promise<boolean> {
   const dir = dirOf(deps);
   if (isSubagentChild() || !(await isSyncableRepo(dir))) return false;
+
+  // Honor `autoSyncIntervalMinutes` for local changes too: never run the (git status + commit + push) cycle
+  // more often than configured. Startup sync and the shutdown push do not go through here.
+  if (!(await shouldAutoSync(deps))) return false;
 
   const localChanges = await hasLocalChanges(dir);
   const config = await readConfig(deps, ctx);
